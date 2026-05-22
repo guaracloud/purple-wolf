@@ -35,8 +35,8 @@ impl Rules {
     /// group's own config and any matching override (override wins -> Off).
     pub fn group_mode(&self, cfg: &Config, group: Group, host: &str, path: &str) -> GroupMode {
         for ov in &cfg.overrides {
-            let host_ok = ov.host.as_deref().map_or(true, |h| h == host);
-            let path_ok = ov.path_prefix.as_deref().map_or(true, |p| path.starts_with(p));
+            let host_ok = ov.host.as_deref().is_none_or(|h| h == host);
+            let path_ok = ov.path_prefix.as_deref().is_none_or(|p| path.starts_with(p));
             if host_ok && path_ok && ov.disable_groups.iter().any(|g| g == group.as_str()) {
                 return GroupMode::Off;
             }
@@ -110,5 +110,40 @@ mod tests {
         let groups = rules.enabled_groups(&cfg, "h", "/");
         assert!(groups.contains(&Group::Injection));
         assert!(!groups.contains(&Group::Reputation));
+    }
+
+    #[test]
+    fn reload_picks_up_valid_change() {
+        let dir = std::env::temp_dir().join("pw-rules-test-valid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("c.toml");
+        std::fs::write(&path, BASE).unwrap();
+        let rules = Rules::new(config(BASE), path.clone());
+        assert_eq!(rules.current().mode, crate::config::Mode::Enforce);
+
+        // Rewrite the file with mode = "monitor" and reload.
+        let changed = BASE.replace(r#"mode = "enforce""#, r#"mode = "monitor""#);
+        std::fs::write(&path, &changed).unwrap();
+        rules.reload().expect("valid config should reload");
+        assert_eq!(rules.current().mode, crate::config::Mode::Monitor);
+    }
+
+    #[test]
+    fn reload_keeps_old_config_on_parse_error() {
+        let dir = std::env::temp_dir().join("pw-rules-test-bad");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("c.toml");
+        std::fs::write(&path, BASE).unwrap();
+        let rules = Rules::new(config(BASE), path.clone());
+
+        // Write garbage; reload must fail and leave the old config intact.
+        std::fs::write(&path, "this is not valid toml {{{").unwrap();
+        let result = rules.reload();
+        assert!(result.is_err(), "bad config must produce an error");
+        assert_eq!(
+            rules.current().mode,
+            crate::config::Mode::Enforce,
+            "old config must be retained after a failed reload"
+        );
     }
 }
