@@ -136,7 +136,7 @@ pub async fn handle(
     // Audit log + metrics.
     let entry = AuditEntry::from(&view, &decision);
     if entry.is_noteworthy() {
-        tracing::warn!(target: "audit", entry = %serde_json::to_string(&entry).unwrap_or_default());
+        observe::log_audit(&entry);
     }
     let hits: Vec<&str> = decision
         .would_block

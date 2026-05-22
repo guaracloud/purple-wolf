@@ -59,6 +59,15 @@ impl AuditEntry {
     }
 }
 
+/// Emit an audit entry as one JSON line to stdout. K8s log collectors pick
+/// this up alongside tracing output; we deliberately bypass `tracing` here
+/// so the audit JSON is not embedded as a string inside a wrapper record.
+pub fn log_audit(entry: &AuditEntry) {
+    if let Ok(line) = serde_json::to_string(entry) {
+        println!("{line}");
+    }
+}
+
 /// Record Prometheus counters/histogram for one handled request.
 pub fn record_request(action: Action, group_hits: &[&str], latency_us: f64) {
     metrics::counter!("purple_wolf_requests_total").increment(1);
