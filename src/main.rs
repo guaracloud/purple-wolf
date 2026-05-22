@@ -3,6 +3,7 @@ mod detectors;
 mod ffi;
 mod observe;
 mod policy;
+mod proxy;
 mod request_model;
 mod rules;
 
