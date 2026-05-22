@@ -1,0 +1,70 @@
+# Example: add purple-wolf as a sidecar in front of an app container.
+# The app's Service targetPort must point at 8080 (the WAF), not the app port.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: purple-wolf-config
+data:
+  purple-wolf.toml: |
+    mode = "monitor"
+    fail_mode = "fail_open"
+    upstream = "http://127.0.0.1:3000"
+    listen = "0.0.0.0:8080"
+    [body]
+    max_inspect_bytes = 1048576
+    over_cap = "pass"
+    [groups.injection]
+    enabled = true
+    mode = "enforce"
+    [groups.signatures]
+    enabled = true
+    mode = "enforce"
+    [groups.structural]
+    enabled = true
+    mode = "monitor"
+    [groups.reputation]
+    enabled = false
+    mode = "monitor"
+---
+# Patch to merge into an existing app Deployment's pod spec:
+#   spec.template.spec.containers: add the purple-wolf container below.
+#   The app container keeps listening on 3000; purple-wolf listens on 8080.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-app
+spec:
+  template:
+    spec:
+      containers:
+        - name: purple-wolf
+          image: purple-wolf:dev
+          ports:
+            - { name: waf, containerPort: 8080 }
+            - { name: metrics, containerPort: 9090 }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 64Mi }
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            periodSeconds: 3
+          volumeMounts:
+            - { name: waf-config, mountPath: /config }
+      volumes:
+        - name: waf-config
+          configMap: { name: purple-wolf-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-app
+spec:
+  selector:
+    app: example-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080   # routes to purple-wolf, which forwards to the app
