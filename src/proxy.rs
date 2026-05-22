@@ -6,7 +6,7 @@ use crate::request_model::RequestView;
 use crate::rules::Rules;
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
-use axum::http::{Request, Response, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode};
 use futures_util::{Stream, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -202,12 +202,44 @@ async fn forward(
         Ok(resp) => {
             let status = StatusCode::from_u16(resp.status().as_u16())
                 .unwrap_or(StatusCode::BAD_GATEWAY);
-            let bytes = resp.bytes().await.unwrap_or_default();
-            let mut out = Response::new(Body::from(bytes));
+            // Capture upstream response headers BEFORE consuming the body —
+            // otherwise the headers map disappears with the response object.
+            let upstream_headers = resp.headers().clone();
+            // Stream the upstream body end-to-end so a multi-GB response
+            // never lands in our memory.
+            let stream = resp.bytes_stream();
+            let mut out = Response::new(Body::from_stream(stream));
             *out.status_mut() = status;
+            copy_response_headers(&upstream_headers, out.headers_mut());
             out
         }
-        Err(_) => bad_gateway("upstream unreachable"),
+        Err(e) => {
+            metrics::counter!("purple_wolf_upstream_errors_total").increment(1);
+            tracing::warn!(error = %e, "upstream forward failed");
+            bad_gateway("upstream unreachable")
+        }
+    }
+}
+
+/// Copy upstream response headers to the downstream response, skipping
+/// hop-by-hop / framing headers. Converts between `reqwest::header` and
+/// `axum::http` header types via `from_bytes` — both crates use `http` 1.x
+/// underneath, but going through the bytes representation keeps us
+/// future-proof against minor type divergence.
+fn copy_response_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
+    for (k, v) in src.iter() {
+        if is_hop_by_hop(k.as_str()) {
+            continue;
+        }
+        let name = match HeaderName::from_bytes(k.as_ref()) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let value = match HeaderValue::from_bytes(v.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        dst.append(name, value);
     }
 }
 

@@ -97,9 +97,20 @@ fn monitor_mode_allows_sqli() {
 /// Python echo upstream: accepts POST, responds 200 with the received byte
 /// count as the body. Handles BOTH a `Content-Length` body and a `chunked`
 /// transfer-encoding body — the latter is required because purple-wolf streams
-/// an over-cap body to the upstream, which reqwest sends as `chunked`.
+/// an over-cap body to the upstream, which reqwest sends as `chunked`. Also
+/// answers GETs with a couple of distinctive upstream headers (`Set-Cookie`,
+/// `X-Pw-Test`) so tests can assert end-to-end header pass-through.
 const ECHO_SERVER: &str = r#"import http.server, sys
 class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'ok'
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Set-Cookie', 'pw-test=1; Path=/')
+        self.send_header('X-Pw-Test', 'present')
+        self.end_headers()
+        self.wfile.write(body)
     def do_POST(self):
         te = self.headers.get('Transfer-Encoding', '').lower()
         if 'chunked' in te:
@@ -160,6 +171,55 @@ fn post_file(port: u16, path: &str, file: &std::path::Path) -> String {
         .output()
         .expect("curl");
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// GET a URL and return curl's raw response headers (`-D -`) as a string.
+fn get_headers(port: u16, path: &str) -> String {
+    let out = Command::new("curl")
+        .args(["-s", "-D", "-", "-o", "/dev/null",
+               &format!("http://127.0.0.1:{port}{path}")])
+        .output()
+        .expect("curl");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn upstream_response_headers_pass_through() {
+    let waf_port = 18084;
+    let upstream_port = 13004;
+    let cfg = format!(
+        r#"
+mode = "enforce"
+fail_mode = "fail_open"
+upstream = "http://127.0.0.1:{upstream_port}"
+listen = "0.0.0.0:{waf_port}"
+[body]
+max_inspect_bytes = 1048576
+over_cap = "pass"
+[groups.injection]
+enabled = true
+mode = "enforce"
+[groups.signatures]
+enabled = true
+mode = "enforce"
+[groups.structural]
+enabled = true
+mode = "enforce"
+[groups.reputation]
+enabled = false
+mode = "monitor"
+"#
+    );
+    let (_s, _dir) = start_echo(&cfg, waf_port, upstream_port);
+    let headers = get_headers(waf_port, "/");
+    assert!(
+        headers.to_lowercase().contains("set-cookie: pw-test=1"),
+        "upstream Set-Cookie must pass through, got: {headers:?}"
+    );
+    assert!(
+        headers.to_lowercase().contains("x-pw-test: present"),
+        "custom upstream header must pass through, got: {headers:?}"
+    );
 }
 
 #[test]
