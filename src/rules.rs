@@ -124,6 +124,30 @@ mod tests {
         assert_eq!(rules.current().mode, crate::config::Mode::Monitor);
     }
 
+    /// Simulates a Kubernetes ConfigMap update: write the new config to a
+    /// temp path and atomically `rename` it over the original. We can't
+    /// drive the live `notify` watcher in-process here, so this exercises
+    /// the `Rules::reload()` half of the equation — once main.rs watches
+    /// the parent directory, the rename triggers the same code path.
+    #[test]
+    fn reload_after_atomic_rename_reflects_new_config() {
+        let dir = std::env::temp_dir().join("pw-rules-test-atomic");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("c.toml");
+        std::fs::write(&path, BASE).unwrap();
+        let rules = Rules::new(config(BASE), path.clone());
+        assert_eq!(rules.current().mode, crate::config::Mode::Enforce);
+
+        let tmp = dir.join("c.toml.new");
+        let changed = BASE.replace(r#"mode = "enforce""#, r#"mode = "monitor""#);
+        std::fs::write(&tmp, &changed).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
+        // The watcher would call reload() on the rename event — invoke it
+        // directly to assert the live config now reflects the swapped file.
+        rules.reload().expect("post-rename reload must succeed");
+        assert_eq!(rules.current().mode, crate::config::Mode::Monitor);
+    }
+
     #[test]
     fn reload_keeps_old_config_on_parse_error() {
         let dir = std::env::temp_dir().join("pw-rules-test-bad");

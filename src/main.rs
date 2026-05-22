@@ -19,7 +19,7 @@ use axum::routing::any;
 use axum::Router;
 use notify::{RecursiveMode, Watcher};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -45,6 +45,15 @@ async fn main() {
     let rules = Arc::new(Rules::new(cfg, config_path.clone()));
 
     // Hot-reload watcher: re-read config on file change.
+    //
+    // We watch the PARENT DIRECTORY, not the file itself. Kubernetes mounts a
+    // ConfigMap as a symlink (`<mount>/key -> ..data/key`) and updates it via
+    // an atomic symlink swap on the `..data` directory; an inotify watch on
+    // the original file inode never fires for that swap, so file-level
+    // watches silently miss every in-cluster reload. Watching the parent dir
+    // catches the swap (and any plain editor save). `reload()` is cheap and
+    // idempotent, so firing on every dir event — including unrelated ones —
+    // is fine.
     let watch_rules = rules.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
@@ -55,9 +64,14 @@ async fn main() {
         }
     })
     .expect("watcher must build");
+    let watch_dir = config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     watcher
-        .watch(&config_path, RecursiveMode::NonRecursive)
-        .expect("must watch config file");
+        .watch(&watch_dir, RecursiveMode::NonRecursive)
+        .expect("must watch config directory");
 
     let state = AppState {
         rules,
