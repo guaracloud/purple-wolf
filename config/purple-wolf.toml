@@ -1,0 +1,24 @@
+mode = "monitor"
+fail_mode = "fail_open"
+upstream = "http://127.0.0.1:3000"
+listen = "0.0.0.0:8080"
+
+[body]
+max_inspect_bytes = 1048576
+over_cap = "pass"
+
+[groups.injection]
+enabled = true
+mode = "enforce"
+
+[groups.signatures]
+enabled = true
+mode = "enforce"
+
+[groups.structural]
+enabled = true
+mode = "monitor"
+
+[groups.reputation]
+enabled = false
+mode = "monitor"
