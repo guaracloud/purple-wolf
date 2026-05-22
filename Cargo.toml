@@ -30,9 +30,11 @@ tokio = { version = "1", features = ["full"] }
 [build-dependencies]
 cc = "1"
 
+# `panic = "unwind"` (the default) is kept intentionally: the proxy relies on
+# `catch_unwind` for per-request panic isolation (see spec section 8). The
+# binary is well under the size budget without `panic = "abort"`.
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
