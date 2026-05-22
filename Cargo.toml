@@ -1,0 +1,38 @@
+[package]
+name = "purple-wolf"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "purple-wolf"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+axum = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+aho-corasick = "1"
+governor = "0.6"
+notify = "6"
+arc-swap = "1"
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+percent-encoding = "2"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
