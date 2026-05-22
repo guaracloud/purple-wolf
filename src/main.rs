@@ -15,7 +15,7 @@ use crate::detectors::structural::StructuralDetector;
 use crate::detectors::{Detector, Engine};
 use crate::proxy::AppState;
 use crate::rules::Rules;
-use axum::routing::any;
+use axum::routing::{any, get};
 use axum::Router;
 use notify::{RecursiveMode, Watcher};
 use std::net::{IpAddr, SocketAddr};
@@ -35,6 +35,10 @@ async fn main() {
     let text = std::fs::read_to_string(&config_path).expect("config file must exist");
     let cfg: Config = Config::parse(&text).expect("config must parse");
     let listen: SocketAddr = cfg.listen.parse().expect("listen must be a socket addr");
+    let metrics_addr: SocketAddr = cfg
+        .metrics_listen
+        .parse()
+        .expect("metrics_listen must be a socket addr");
 
     // Parse the reputation deny list; bad entries are logged and skipped so a
     // typo in one IP can't take the WAF down. NOTE: the rate-limiter quota
@@ -96,13 +100,19 @@ async fn main() {
         http: reqwest::Client::new(),
     };
 
-    // Prometheus metrics on a second listener.
+    // Prometheus metrics on a second listener. The bind address comes
+    // from config so cluster operators can choose a non-default port
+    // without rebuilding.
     metrics_exporter_prometheus::PrometheusBuilder::new()
-        .with_http_listener(([0, 0, 0, 0], 9090))
+        .with_http_listener(metrics_addr)
         .install()
         .expect("metrics exporter must install");
 
+    // `/healthz` is mounted BEFORE the fallback so it short-circuits the
+    // WAF inspection pipeline — probes must not be subject to detectors,
+    // and must respond fast even if the engine is panicking.
     let app = Router::new()
+        .route("/healthz", get(healthz))
         .fallback(any(proxy::handle))
         .with_state(state);
 
@@ -115,3 +125,7 @@ async fn main() {
     .await
     .expect("server");
 }
+
+/// Liveness/readiness probe endpoint. Returns 200 with body "ok"
+/// without touching detectors or the engine.
+async fn healthz() -> &'static str { "ok" }

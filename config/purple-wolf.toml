@@ -2,6 +2,7 @@ mode = "monitor"
 fail_mode = "fail_open"
 upstream = "http://127.0.0.1:3000"
 listen = "0.0.0.0:8080"
+metrics_listen = "0.0.0.0:9090"
 
 [body]
 max_inspect_bytes = 1048576

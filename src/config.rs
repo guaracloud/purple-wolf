@@ -96,9 +96,16 @@ pub struct Config {
     pub overrides: Vec<Override>,
     pub upstream: String,
     pub listen: String,
+    /// Where the Prometheus exporter binds. Separate from the proxy
+    /// listener so cluster operators can scrape it without exposing
+    /// the proxy port.
+    #[serde(default = "default_metrics_listen")]
+    pub metrics_listen: String,
     #[serde(default)]
     pub reputation: ReputationConfig,
 }
+
+fn default_metrics_listen() -> String { "0.0.0.0:9090".to_string() }
 
 impl Config {
     pub fn parse(text: &str) -> Result<Config, toml::de::Error> {

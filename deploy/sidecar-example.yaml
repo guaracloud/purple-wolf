@@ -10,6 +10,7 @@ data:
     fail_mode = "fail_open"
     upstream = "http://127.0.0.1:3000"
     listen = "0.0.0.0:8080"
+    metrics_listen = "0.0.0.0:9090"
     [body]
     max_inspect_bytes = 1048576
     over_cap = "pass"
@@ -41,6 +42,12 @@ metadata:
 spec:
   template:
     spec:
+      # Pod-level securityContext for clusters that enforce the
+      # `restricted` Pod Security Standard.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: purple-wolf
           image: purple-wolf:dev
@@ -50,12 +57,20 @@ spec:
           resources:
             requests: { cpu: 25m, memory: 32Mi }
             limits: { cpu: 250m, memory: 64Mi }
+          # HTTP probes hit the dedicated `/healthz` endpoint, which is
+          # mounted ahead of the WAF fallback and never invokes detectors.
           livenessProbe:
-            tcpSocket: { port: 8080 }
+            httpGet: { path: /healthz, port: 8080 }
             periodSeconds: 5
           readinessProbe:
-            tcpSocket: { port: 8080 }
+            httpGet: { path: /healthz, port: 8080 }
             periodSeconds: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: waf-config, mountPath: /config }
       volumes:
