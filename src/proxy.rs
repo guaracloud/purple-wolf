@@ -8,7 +8,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode};
 use futures_util::{Stream, StreamExt};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -97,9 +97,10 @@ pub async fn handle(
             }
         };
 
+    let source_ip = client_ip(&parts.headers, peer.ip());
     let view = RequestView::build(
         &method, &host, &path, &raw_query, headers.clone(),
-        inspect_body, body_inspected, peer.ip(),
+        inspect_body, body_inspected, source_ip,
     );
 
     // Inspect, isolating any detector panic per request.
@@ -252,6 +253,31 @@ fn is_hop_by_hop(name: &str) -> bool {
         || name.eq_ignore_ascii_case("connection")
 }
 
+/// Derive the client source IP. In the sidecar topology the TCP peer is
+/// always the local proxy (loopback), so we honour standard L7 headers
+/// before falling back to the transport-level peer:
+///
+/// 1. First parseable, comma-separated entry of `X-Forwarded-For`.
+/// 2. `X-Real-IP`.
+/// 3. The TCP peer.
+pub fn client_ip(headers: &HeaderMap, peer: IpAddr) -> IpAddr {
+    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        for part in v.split(',') {
+            if let Ok(ip) = part.trim().parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+    if let Some(ip) = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        return ip;
+    }
+    peer
+}
+
 fn blocked_response(reason: &str) -> Response<Body> {
     let mut out = Response::new(Body::from(reason.to_string()));
     *out.status_mut() = StatusCode::FORBIDDEN;
@@ -271,6 +297,58 @@ mod tests {
     /// Build a synthetic request body of `n` zero bytes.
     fn body_of(n: usize) -> Body {
         Body::from(Bytes::from(vec![0u8; n]))
+    }
+
+    fn peer() -> IpAddr {
+        "127.0.0.1".parse().unwrap()
+    }
+
+    #[test]
+    fn client_ip_uses_xff_single() {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+        assert_eq!(client_ip(&h, peer()), "203.0.113.7".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn client_ip_uses_xff_leftmost_parseable_with_spaces() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static(" 203.0.113.7 , 10.0.0.1 , 10.0.0.2"),
+        );
+        assert_eq!(client_ip(&h, peer()), "203.0.113.7".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn client_ip_falls_through_xff_garbage_to_next_valid() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("not-an-ip, 198.51.100.5"),
+        );
+        assert_eq!(client_ip(&h, peer()), "198.51.100.5".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn client_ip_uses_x_real_ip_when_no_xff() {
+        let mut h = HeaderMap::new();
+        h.insert("x-real-ip", HeaderValue::from_static("198.51.100.9"));
+        assert_eq!(client_ip(&h, peer()), "198.51.100.9".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_peer_when_no_headers() {
+        let h = HeaderMap::new();
+        assert_eq!(client_ip(&h, peer()), peer());
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_peer_when_both_unparseable() {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", HeaderValue::from_static("not-an-ip"));
+        h.insert("x-real-ip", HeaderValue::from_static("also-not"));
+        assert_eq!(client_ip(&h, peer()), peer());
     }
 
     #[tokio::test]
