@@ -68,6 +68,14 @@ mod tests {
     }
 
     #[test]
+    fn flags_oversized_headers() {
+        let headers = vec![("x-big".into(), "a".repeat(17 * 1024))];
+        let req = RequestView::build("GET", "h", "/", "", headers, vec![], false, ip());
+        let v = StructuralDetector.inspect(&req);
+        assert!(v.iter().any(|x| x.rule == "headers_too_large"));
+    }
+
+    #[test]
     fn normal_request_is_clean() {
         let req = RequestView::build("GET", "h", "/", "",
             vec![("accept".into(), "*/*".into())], vec![], false, ip());
