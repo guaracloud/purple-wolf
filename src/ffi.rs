@@ -12,9 +12,14 @@ extern "C" {
 
 /// Safe wrapper: is `s` SQL injection?
 pub fn is_sqli(s: &str) -> bool {
-    let mut fp = [0i8; 16];
+    // `c_char` is `i8` on most targets but `u8` on aarch64 Linux; using
+    // `0 as c_char` keeps the buffer element type matching the FFI parameter.
+    let mut fp = [0 as c_char; 16];
     // SAFETY: pointer + length describe `s`; fp is a valid 16-byte buffer.
     let r = unsafe { libinjection_sqli(s.as_ptr() as *const c_char, s.len(), fp.as_mut_ptr()) };
+    // libinjection's `injection_result_t` is { FALSE=0, TRUE=1, ERROR=-1 }.
+    // Treating anything but 1 as benign means a `-1` error fails open: an
+    // intentional choice so a libinjection error never blocks valid traffic.
     r == 1
 }
 
@@ -22,6 +27,8 @@ pub fn is_sqli(s: &str) -> bool {
 pub fn is_xss(s: &str) -> bool {
     // SAFETY: pointer + length describe `s`.
     let r = unsafe { libinjection_xss(s.as_ptr() as *const c_char, s.len()) };
+    // As in `is_sqli`: a `-1` error return is intentionally treated as
+    // benign (fail-open) rather than blocking the request.
     r == 1
 }
 
