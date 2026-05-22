@@ -16,6 +16,7 @@ pub struct ReputationDetector {
 
 impl ReputationDetector {
     /// `per_second` requests allowed per source IP before flagging.
+    /// A value of 0 is treated as 1 (the limiter requires a non-zero quota).
     pub fn new(per_second: u32, deny_list: Vec<IpAddr>) -> ReputationDetector {
         let quota = Quota::per_second(NonZeroU32::new(per_second.max(1)).unwrap());
         ReputationDetector {
