@@ -8,6 +8,8 @@ const SIGNATURES: &[(&str, &str, Severity)] = &[
     ("..\\", "path_traversal", Severity::High),
     ("/etc/passwd", "lfi", Severity::Critical),
     ("$(", "rce_subshell", Severity::Critical),
+    // Bare backtick: prone to false positives on Markdown/CMS/JSON traffic.
+    // Kept for RCE coverage — retune (e.g. narrow the literal) if noisy.
     ("`", "rce_backtick", Severity::High),
     ("/bin/sh", "rce_shell", Severity::Critical),
     ("sqlmap", "scanner_ua", Severity::Medium),
