@@ -18,7 +18,7 @@ use crate::rules::Rules;
 use axum::routing::any;
 use axum::Router;
 use notify::{RecursiveMode, Watcher};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -36,11 +36,28 @@ async fn main() {
     let cfg: Config = Config::parse(&text).expect("config must parse");
     let listen: SocketAddr = cfg.listen.parse().expect("listen must be a socket addr");
 
+    // Parse the reputation deny list; bad entries are logged and skipped so a
+    // typo in one IP can't take the WAF down. NOTE: the rate-limiter quota
+    // (`per_second`) is fixed at process start — the underlying governor
+    // limiter does not support live re-quota'ing, so a hot-reload that changes
+    // `per_second` is intentionally NOT picked up until restart.
+    let deny_list: Vec<IpAddr> = cfg
+        .reputation
+        .deny_list
+        .iter()
+        .filter_map(|raw| match raw.parse::<IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                tracing::warn!(entry = %raw, error = %e, "skipping unparseable reputation.deny_list entry");
+                None
+            }
+        })
+        .collect();
     let detectors: Vec<Box<dyn Detector>> = vec![
         Box::new(InjectionDetector),
         Box::new(SignatureDetector::new()),
         Box::new(StructuralDetector),
-        Box::new(ReputationDetector::new(100, vec![])),
+        Box::new(ReputationDetector::new(cfg.reputation.per_second, deny_list)),
     ];
     let rules = Arc::new(Rules::new(cfg, config_path.clone()));
 

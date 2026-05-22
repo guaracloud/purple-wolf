@@ -25,6 +25,11 @@ data:
     [groups.reputation]
     enabled = false
     mode = "monitor"
+    # Reputation detector tuning. `per_second` is fixed at process
+    # start; hot-reload does NOT re-quota the limiter.
+    # [reputation]
+    # per_second = 100
+    # deny_list = []
 ---
 # Patch to merge into an existing app Deployment's pod spec:
 #   spec.template.spec.containers: add the purple-wolf container below.

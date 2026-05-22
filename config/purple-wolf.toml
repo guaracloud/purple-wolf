@@ -22,3 +22,11 @@ mode = "monitor"
 [groups.reputation]
 enabled = false
 mode = "monitor"
+
+# Reputation detector tuning. `per_second` is the per-source-IP rate
+# limit; `deny_list` is a static allowlist of denied IPs. NOTE:
+# `per_second` is fixed at process start — hot-reloading the config
+# does NOT re-quota the limiter.
+# [reputation]
+# per_second = 100
+# deny_list = []
