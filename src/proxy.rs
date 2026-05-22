@@ -7,6 +7,7 @@ use crate::rules::Rules;
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::{Request, Response, StatusCode};
+use futures_util::{Stream, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,6 +18,23 @@ pub struct AppState {
     pub rules: Arc<Rules>,
     pub engine: Arc<Engine>,
     pub http: reqwest::Client,
+}
+
+/// A boxed stream of body chunks, used to forward an oversized body without
+/// ever buffering it whole.
+type ChunkStream =
+    std::pin::Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Send>>;
+
+/// Outcome of incrementally reading the request body.
+enum BodyRead {
+    /// Whole body fits within the inspection cap.
+    Buffered(Bytes),
+    /// Body exceeds the cap. `prefix` is what was read so far; `rest` is the
+    /// not-yet-consumed remainder of the stream. Chaining them reconstructs
+    /// the complete original body for forwarding.
+    OverCap { prefix: Vec<u8>, rest: ChunkStream },
+    /// A genuine read error occurred mid-body.
+    Error,
 }
 
 /// Axum handler: inspect the request, then block or forward to the upstream.
@@ -44,16 +62,44 @@ pub async fn handle(
         .unwrap_or("")
         .to_string();
 
-    // Buffer the body up to the inspection cap.
-    let (body_bytes, body_inspected) = read_body(body, cfg.body.max_inspect_bytes).await;
-    if body_bytes.is_none() && cfg.body.over_cap == OverCap::Block {
-        return blocked_response("body exceeds inspection cap");
-    }
-    let raw_body = body_bytes.clone().unwrap_or_default();
+    // Incrementally read the body up to the inspection cap.
+    let read = read_body(body, cfg.body.max_inspect_bytes).await;
+
+    // `inspect_body` is the bytes handed to detectors; `forward_body` is the
+    // (possibly streaming) body sent upstream. `body_inspected` tells the
+    // detectors whether `inspect_body` is the complete request body.
+    let (inspect_body, body_inspected, forward_body): (Vec<u8>, bool, reqwest::Body) =
+        match read {
+            BodyRead::Buffered(bytes) => {
+                (bytes.to_vec(), true, reqwest::Body::from(bytes))
+            }
+            BodyRead::OverCap { prefix, rest } => match cfg.body.over_cap {
+                OverCap::Block => return blocked_response("body exceeds inspection cap"),
+                OverCap::Pass => {
+                    // Forward the complete original body by streaming the
+                    // already-read prefix chained with the remainder.
+                    let prefix_chunk =
+                        futures_util::stream::once(async move { Ok(Bytes::from(prefix)) });
+                    let full = prefix_chunk.chain(rest);
+                    (Vec::new(), false, reqwest::Body::wrap_stream(full))
+                }
+            },
+            BodyRead::Error => {
+                // Soft failure: a mid-body read error means the body bytes are
+                // gone, so we cannot forward even on fail_open.
+                metrics::counter!("purple_wolf_soft_failures_total").increment(1);
+                match cfg.fail_mode {
+                    FailMode::FailClosed => {
+                        return blocked_response("inspection failed (fail_closed)")
+                    }
+                    FailMode::FailOpen => return bad_gateway("body read error"),
+                }
+            }
+        };
 
     let view = RequestView::build(
         &method, &host, &path, &raw_query, headers.clone(),
-        raw_body.to_vec(), body_inspected, peer.ip(),
+        inspect_body, body_inspected, peer.ip(),
     );
 
     // Inspect, isolating any detector panic per request.
@@ -101,25 +147,41 @@ pub async fn handle(
 
     match decision.action {
         Action::Block => blocked_response("request blocked by purple-wolf"),
-        Action::Allow => forward(&state.http, &cfg, &parts, raw_body).await,
+        Action::Allow => forward(&state.http, &cfg, &parts, forward_body).await,
     }
 }
 
-/// Read the body, capped. Returns (Some(bytes), true) if fully read within the
-/// cap, or (None, false) if it exceeded the cap.
-async fn read_body(body: Body, cap: usize) -> (Option<Bytes>, bool) {
-    match axum::body::to_bytes(body, cap).await {
-        Ok(b) => (Some(b), true),
-        Err(_) => (None, false),
+/// Incrementally read the body up to `cap` bytes.
+///
+/// - Returns `Buffered` if the whole body is `<= cap`.
+/// - Returns `OverCap` (carrying the read prefix plus the unconsumed stream)
+///   once the accumulated size exceeds `cap`, without buffering the rest.
+/// - Returns `Error` on a mid-body read error.
+async fn read_body(body: Body, cap: usize) -> BodyRead {
+    let mut stream = body.into_data_stream();
+    let mut prefix: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                prefix.extend_from_slice(&bytes);
+                if prefix.len() > cap {
+                    let rest: ChunkStream = Box::pin(stream);
+                    return BodyRead::OverCap { prefix, rest };
+                }
+            }
+            Err(_) => return BodyRead::Error,
+        }
     }
+    BodyRead::Buffered(Bytes::from(prefix))
 }
 
-/// Forward an allowed request to the configured `localhost` upstream.
+/// Forward an allowed request to the configured `localhost` upstream. `body`
+/// may be a buffered `Bytes` or a streaming body — both are `reqwest::Body`.
 async fn forward(
     client: &reqwest::Client,
     cfg: &Config,
     parts: &axum::http::request::Parts,
-    body: Bytes,
+    body: reqwest::Body,
 ) -> Response<Body> {
     let url = format!(
         "{}{}",
@@ -130,7 +192,8 @@ async fn forward(
         .unwrap_or(reqwest::Method::GET);
     let mut builder = client.request(method, &url).body(body);
     for (k, v) in parts.headers.iter() {
-        if k.as_str().eq_ignore_ascii_case("host") {
+        // Skip hop-by-hop / framing headers: reqwest sets its own.
+        if is_hop_by_hop(k.as_str()) {
             continue;
         }
         builder = builder.header(k.as_str(), v.as_bytes());
@@ -144,16 +207,71 @@ async fn forward(
             *out.status_mut() = status;
             out
         }
-        Err(_) => {
-            let mut out = Response::new(Body::from("upstream unreachable"));
-            *out.status_mut() = StatusCode::BAD_GATEWAY;
-            out
-        }
+        Err(_) => bad_gateway("upstream unreachable"),
     }
+}
+
+/// True for headers that must not be forwarded verbatim — reqwest manages
+/// framing itself, and the upstream's `Host` differs from the client's.
+fn is_hop_by_hop(name: &str) -> bool {
+    name.eq_ignore_ascii_case("host")
+        || name.eq_ignore_ascii_case("content-length")
+        || name.eq_ignore_ascii_case("transfer-encoding")
+        || name.eq_ignore_ascii_case("connection")
 }
 
 fn blocked_response(reason: &str) -> Response<Body> {
     let mut out = Response::new(Body::from(reason.to_string()));
     *out.status_mut() = StatusCode::FORBIDDEN;
     out
+}
+
+fn bad_gateway(reason: &str) -> Response<Body> {
+    let mut out = Response::new(Body::from(reason.to_string()));
+    *out.status_mut() = StatusCode::BAD_GATEWAY;
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a synthetic request body of `n` zero bytes.
+    fn body_of(n: usize) -> Body {
+        Body::from(Bytes::from(vec![0u8; n]))
+    }
+
+    #[tokio::test]
+    async fn under_cap_is_buffered() {
+        match read_body(body_of(10), 100).await {
+            BodyRead::Buffered(b) => assert_eq!(b.len(), 10),
+            _ => panic!("expected Buffered"),
+        }
+    }
+
+    #[tokio::test]
+    async fn exactly_at_cap_is_buffered() {
+        // `> cap` is the over-cap trigger, so a body equal to the cap buffers.
+        match read_body(body_of(100), 100).await {
+            BodyRead::Buffered(b) => assert_eq!(b.len(), 100),
+            _ => panic!("expected Buffered at exactly the cap"),
+        }
+    }
+
+    #[tokio::test]
+    async fn over_cap_is_classified_and_reconstructs_full_body() {
+        let read = read_body(body_of(250), 100).await;
+        let (prefix, rest) = match read {
+            BodyRead::OverCap { prefix, rest } => (prefix, rest),
+            _ => panic!("expected OverCap"),
+        };
+        assert!(prefix.len() > 100, "prefix must exceed the cap");
+        // Chaining prefix + rest must recover all 250 original bytes.
+        let mut total = prefix.len();
+        let mut stream = rest;
+        while let Some(chunk) = stream.next().await {
+            total += chunk.expect("no read error in test body").len();
+        }
+        assert_eq!(total, 250);
+    }
 }

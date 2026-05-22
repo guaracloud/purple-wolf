@@ -915,6 +915,7 @@ dependencies = [
  "axum",
  "bytes",
  "cc",
+ "futures-util",
  "governor",
  "metrics",
  "metrics-exporter-prometheus",
