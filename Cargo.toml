@@ -20,7 +20,7 @@ governor = "0.6"
 notify = "6"
 arc-swap = "1"
 metrics = "0.23"
-metrics-exporter-prometheus = { version = "0.15", default-features = false }
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 percent-encoding = "2"
