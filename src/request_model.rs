@@ -7,12 +7,14 @@ pub struct RequestView {
     pub method: String,
     pub host: String,
     pub path: String,
+    /// Raw query string (verbatim, undecoded), or `None` when absent/empty.
+    /// Used by the audit log so attack payloads in query parameters are preserved.
+    raw_query: Option<String>,
     /// Decoded query parameters: (name, value).
     pub query_params: Vec<(String, String)>,
     /// Header names are lowercased.
     pub headers: Vec<(String, String)>,
     pub header_bytes: usize,
-    pub body: Vec<u8>,
     /// Lossy UTF-8 of the body, for text-based detectors.
     pub body_text: String,
     pub body_inspected: bool,
@@ -21,6 +23,9 @@ pub struct RequestView {
 
 impl RequestView {
     /// Build a view. `raw_query` is the part after `?` (may be empty).
+    // A normalized request view legitimately has many independent inputs; a
+    // dedicated Params struct would just shuffle the names around.
+    #[allow(clippy::too_many_arguments)]
     pub fn build(
         method: &str,
         host: &str,
@@ -38,18 +43,28 @@ impl RequestView {
             .into_iter()
             .map(|(k, v)| (k.to_ascii_lowercase(), v))
             .collect();
+        let raw_query = if raw_query.is_empty() {
+            None
+        } else {
+            Some(raw_query.to_string())
+        };
         RequestView {
             method: method.to_ascii_uppercase(),
             host: host.to_ascii_lowercase(),
             path: decode(path),
+            raw_query,
             query_params,
             headers,
             header_bytes,
-            body,
             body_text,
             body_inspected,
             source_ip,
         }
+    }
+
+    /// The original raw query string (verbatim, undecoded), if any.
+    pub fn raw_query(&self) -> Option<&str> {
+        self.raw_query.as_deref()
     }
 
     /// Every string a detector should scan: path, param values, body text.
@@ -120,6 +135,21 @@ mod tests {
             vec![], b"payload".to_vec(), true, ip(),
         );
         assert!(v2.inspectable_fields().contains(&"payload"));
+    }
+
+    #[test]
+    fn raw_query_is_preserved_when_present_and_none_when_empty() {
+        let v = RequestView::build(
+            "GET", "h", "/s", "q=%27%20OR%201%3D1",
+            vec![], vec![], false, ip(),
+        );
+        assert_eq!(v.raw_query(), Some("q=%27%20OR%201%3D1"));
+
+        let v2 = RequestView::build(
+            "GET", "h", "/s", "",
+            vec![], vec![], false, ip(),
+        );
+        assert_eq!(v2.raw_query(), None);
     }
 
     #[test]

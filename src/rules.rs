@@ -19,10 +19,6 @@ impl Rules {
         self.config.load_full()
     }
 
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
     /// Re-read the config file. On parse error, keep the existing config.
     pub fn reload(&self) -> Result<(), String> {
         let text = std::fs::read_to_string(&self.path).map_err(|e| e.to_string())?;

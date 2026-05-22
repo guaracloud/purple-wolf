@@ -26,10 +26,25 @@ impl Group {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    // No detector currently emits Low, but it's part of the severity ladder —
+    // future signatures (e.g. minor scanner UA hits) will need it. Kept on
+    // purpose so the public Severity API stays complete.
+    #[allow(dead_code)]
     Low,
     Medium,
     High,
     Critical,
+}
+
+impl Severity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Low => "low",
+            Severity::Medium => "medium",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        }
+    }
 }
 
 /// One detection hit.
