@@ -1,4 +1,5 @@
 mod config;
+mod detectors;
 mod request_model;
 
 fn main() {
