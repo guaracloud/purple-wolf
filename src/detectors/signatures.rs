@@ -1,1 +1,90 @@
-// implemented in a later task
+use crate::detectors::{Detector, Group, Severity, Verdict};
+use crate::request_model::RequestView;
+use aho_corasick::AhoCorasick;
+
+/// (literal, rule name, severity) — extend this table to add signatures.
+const SIGNATURES: &[(&str, &str, Severity)] = &[
+    ("../", "path_traversal", Severity::High),
+    ("..\\", "path_traversal", Severity::High),
+    ("/etc/passwd", "lfi", Severity::Critical),
+    ("$(", "rce_subshell", Severity::Critical),
+    ("`", "rce_backtick", Severity::High),
+    ("/bin/sh", "rce_shell", Severity::Critical),
+    ("sqlmap", "scanner_ua", Severity::Medium),
+    ("nikto", "scanner_ua", Severity::Medium),
+    ("nuclei", "scanner_ua", Severity::Medium),
+];
+
+/// Matches all known-bad literals in a single pass.
+pub struct SignatureDetector {
+    matcher: AhoCorasick,
+}
+
+impl SignatureDetector {
+    pub fn new() -> SignatureDetector {
+        let patterns: Vec<&str> = SIGNATURES.iter().map(|(p, _, _)| *p).collect();
+        let matcher = AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(&patterns)
+            .expect("static signature set must build");
+        SignatureDetector { matcher }
+    }
+}
+
+impl Detector for SignatureDetector {
+    fn group(&self) -> Group {
+        Group::Signatures
+    }
+
+    fn inspect(&self, req: &RequestView) -> Vec<Verdict> {
+        let mut verdicts = Vec::new();
+        // Scan path/params/body plus the User-Agent header.
+        let mut fields = req.inspectable_fields();
+        if let Some(ua) = req.header("user-agent") {
+            fields.push(ua);
+        }
+        for field in fields {
+            for m in self.matcher.find_iter(field) {
+                let (lit, rule, sev) = SIGNATURES[m.pattern().as_usize()];
+                verdicts.push(Verdict {
+                    group: Group::Signatures,
+                    rule,
+                    severity: sev,
+                    detail: format!("matched signature `{}`", lit),
+                });
+            }
+        }
+        verdicts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn ip() -> IpAddr { "1.2.3.4".parse().unwrap() }
+
+    #[test]
+    fn flags_path_traversal() {
+        let req = RequestView::build("GET", "h", "/files", "f=../../etc/passwd",
+            vec![], vec![], false, ip());
+        let v = SignatureDetector::new().inspect(&req);
+        assert!(v.iter().any(|x| x.rule == "path_traversal" || x.rule == "lfi"));
+    }
+
+    #[test]
+    fn flags_scanner_user_agent() {
+        let req = RequestView::build("GET", "h", "/", "",
+            vec![("user-agent".into(), "sqlmap/1.7".into())], vec![], false, ip());
+        let v = SignatureDetector::new().inspect(&req);
+        assert!(v.iter().any(|x| x.rule == "scanner_ua"));
+    }
+
+    #[test]
+    fn benign_request_is_clean() {
+        let req = RequestView::build("GET", "h", "/about", "ref=home",
+            vec![("user-agent".into(), "Mozilla/5.0".into())], vec![], false, ip());
+        assert!(SignatureDetector::new().inspect(&req).is_empty());
+    }
+}
