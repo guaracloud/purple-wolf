@@ -1,0 +1,17 @@
+# Chain the strict middleware on /admin and the monitor one elsewhere.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: my-app
+  namespace: tenant-acme
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: "Host(`acme.example.com`) && PathPrefix(`/admin`)"
+      services: [{ name: my-app, port: 3000 }]
+      middlewares: [{ name: purple-wolf-strict }]
+    - kind: Rule
+      match: "Host(`acme.example.com`)"
+      services: [{ name: my-app, port: 3000 }]
+      middlewares: [{ name: purple-wolf-monitor }]

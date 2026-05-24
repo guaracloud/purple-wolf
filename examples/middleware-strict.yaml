@@ -1,0 +1,23 @@
+# A WAF Middleware blocking SQLi/XSS, signatures, structural anomalies.
+# Reference this in an IngressRoute to protect a route in enforce mode.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: purple-wolf-strict
+  namespace: tenant-acme
+spec:
+  plugin:
+    purpleWolf:
+      mode: enforce
+      failMode: failOpen
+      body:
+        maxInspectBytes: 1048576
+        overCap: pass
+      groups:
+        injection:  { enabled: true, mode: enforce }
+        signatures: { enabled: true, mode: enforce }
+        structural: { enabled: true, mode: enforce }
+        reputation: { enabled: true, mode: enforce }
+      reputation:
+        perSecond: 100
+        denyList: []

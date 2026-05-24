@@ -1,0 +1,17 @@
+# Log-only WAF: never blocks, emits a JSON audit line for every verdict.
+# Use this for a 1-2 week rollout to tune false positives, then switch
+# to purple-wolf-strict.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: purple-wolf-monitor
+  namespace: tenant-acme
+spec:
+  plugin:
+    purpleWolf:
+      mode: monitor
+      groups:
+        injection:  { enabled: true, mode: enforce }
+        signatures: { enabled: true, mode: enforce }
+        structural: { enabled: true, mode: monitor }
+        reputation: { enabled: true, mode: monitor }
