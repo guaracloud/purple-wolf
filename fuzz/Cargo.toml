@@ -1,0 +1,36 @@
+[package]
+name = "purple-wolf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+purple-wolf-core = { path = "../crates/purple-wolf-core" }
+
+[[bin]]
+name = "request_parser"
+path = "fuzz_targets/request_parser.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "injection_inspect"
+path = "fuzz_targets/injection_inspect.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "signatures_inspect"
+path = "fuzz_targets/signatures_inspect.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "policy_decide"
+path = "fuzz_targets/policy_decide.rs"
+test = false
+doc  = false
