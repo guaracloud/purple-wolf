@@ -1,5 +1,7 @@
 /target
 /fuzz/target
+/tests/traefik_integration/target
+/tests/traefik_integration/Cargo.lock
 /fuzz/corpus/**/*
 !/fuzz/corpus/*/
 !/fuzz/corpus/*/seed-*

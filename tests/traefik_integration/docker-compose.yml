@@ -1,0 +1,13 @@
+services:
+  upstream:
+    image: python:3-alpine
+    command: ["python", "-m", "http.server", "8000"]
+  traefik:
+    image: traefik:v3
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports: ["8080:8080"]
+    volumes:
+      - ./traefik:/etc/traefik:ro
+      - ../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm:/plugins-local/src/github.com/guaracloud-oss/purple-wolf/purple-wolf.wasm:ro
+    depends_on: [upstream]

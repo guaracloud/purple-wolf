@@ -1,0 +1,12 @@
+entryPoints:
+  web:
+    address: ":8080"
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+experimental:
+  localPlugins:
+    purpleWolf:
+      moduleName: github.com/guaracloud-oss/purple-wolf
+log:
+  level: INFO

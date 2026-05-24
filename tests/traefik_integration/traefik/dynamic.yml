@@ -1,0 +1,29 @@
+http:
+  routers:
+    enforce:
+      rule: "PathPrefix(`/e`)"
+      service: echo
+      middlewares: [strict-waf]
+    monitor:
+      rule: "PathPrefix(`/m`)"
+      service: echo
+      middlewares: [monitor-waf]
+  services:
+    echo:
+      loadBalancer:
+        servers:
+          - url: "http://upstream:8000"
+  middlewares:
+    strict-waf:
+      plugin:
+        purpleWolf:
+          mode: enforce
+          groups:
+            injection:  { enabled: true,  mode: enforce }
+            signatures: { enabled: true,  mode: enforce }
+    monitor-waf:
+      plugin:
+        purpleWolf:
+          mode: monitor
+          groups:
+            injection: { enabled: true, mode: enforce }

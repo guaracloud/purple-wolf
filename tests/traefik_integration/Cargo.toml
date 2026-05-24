@@ -1,0 +1,10 @@
+[package]
+name = "purple-wolf-traefik-integration"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+ureq = "2"
