@@ -1,15 +1,20 @@
+//! Request decision logic: resolves detector verdicts into an allow/block action.
 use crate::config::{GroupMode, Mode};
 use crate::detectors::{Group, Verdict};
 
+/// Outcome of a single request inspection: pass through or block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    /// The request is permitted to proceed.
     Allow,
+    /// The request is blocked and should receive an error response.
     Block,
 }
 
 /// The final decision for one request.
 #[derive(Debug)]
 pub struct Decision {
+    /// Whether to allow or block the request.
     pub action: Action,
     /// The verdict that caused a block, if any.
     pub blocked_by: Option<Verdict>,

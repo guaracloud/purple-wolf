@@ -1,23 +1,30 @@
+//! HTTP request normalization and client-IP resolution.
 use percent_encoding::percent_decode_str;
 use std::net::IpAddr;
 
 /// A normalized, decoded view of one HTTP request. Detectors read this only.
 #[derive(Debug, Clone)]
 pub struct Request {
+    /// HTTP method of the inspected request, upper-cased.
     pub method: String,
+    /// Lowercased hostname from the request.
     pub host: String,
+    /// Percent-decoded request path.
     pub path: String,
     /// Raw query string (verbatim, undecoded), or `None` when absent/empty.
     /// Used by the audit log so attack payloads in query parameters are preserved.
     raw_query: Option<String>,
     /// Decoded query parameters: (name, value).
     pub query_params: Vec<(String, String)>,
-    /// Header names are lowercased.
+    /// Header list with lowercased names.
     pub headers: Vec<(String, String)>,
+    /// Total byte size of all header names and values combined.
     pub header_bytes: usize,
     /// Lossy UTF-8 of the body, for text-based detectors.
     pub body_text: String,
+    /// Whether the body was read and is available for inspection.
     pub body_inspected: bool,
+    /// Source IP address, resolved from proxy headers or direct peer.
     pub source_ip: IpAddr,
 }
 

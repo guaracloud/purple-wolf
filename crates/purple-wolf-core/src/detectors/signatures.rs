@@ -23,6 +23,7 @@ pub struct SignatureDetector {
 }
 
 impl SignatureDetector {
+    /// Build a `SignatureDetector` with the compiled static signature set.
     pub fn new() -> SignatureDetector {
         let patterns: Vec<&str> = SIGNATURES.iter().map(|(p, _, _)| *p).collect();
         let matcher = AhoCorasick::builder()

@@ -1,44 +1,64 @@
+//! Configuration types parsed from TOML or JSON.
 use serde::Deserialize;
 
+/// Global WAF behavior switch: log-only or block-and-log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    /// Log detections but allow all requests through.
     Monitor,
+    /// Block requests when a detector fires in enforce mode.
     Enforce,
 }
 
+/// Action taken when the WAF itself encounters an internal error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailMode {
+    /// Allow the request through on internal error (fail-open).
     FailOpen,
+    /// Block the request on internal error (fail-closed).
     FailClosed,
 }
 
+/// Per-group enforcement level, overriding the global mode for one detector group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupMode {
+    /// Block matching requests (subject to the global `Mode`).
     Enforce,
+    /// Log but never block, regardless of the global `Mode`.
     Monitor,
+    /// Disable this group entirely; detections are skipped.
     Off,
 }
 
+/// Policy applied when a request body exceeds `max_inspect_bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverCap {
+    /// Allow the request even though the body was not fully inspected.
     Pass,
+    /// Block the request when the body exceeds the inspection limit.
     Block,
 }
 
+/// Body-inspection size limit and over-cap policy.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BodyConfig {
+    /// Maximum body bytes to inspect; bytes beyond this limit are ignored.
     pub max_inspect_bytes: usize,
+    /// Action when the body is larger than `max_inspect_bytes`.
     pub over_cap: OverCap,
 }
 
+/// Per-group enable flag and enforcement mode.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GroupConfig {
+    /// Whether this detector group is active.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Enforcement mode for this group, overriding the global mode.
     #[serde(default = "default_group_mode")]
     pub mode: GroupMode,
 }
@@ -46,14 +66,19 @@ pub struct GroupConfig {
 fn default_true() -> bool { true }
 fn default_group_mode() -> GroupMode { GroupMode::Enforce }
 
+/// Per-group configuration, one entry for each built-in detector group.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Groups {
+    /// Configuration for the injection detector group.
     #[serde(default)]
     pub injection: Option<GroupConfig>,
+    /// Configuration for the signatures detector group.
     #[serde(default)]
     pub signatures: Option<GroupConfig>,
+    /// Configuration for the structural detector group.
     #[serde(default)]
     pub structural: Option<GroupConfig>,
+    /// Configuration for the reputation detector group.
     #[serde(default)]
     pub reputation: Option<GroupConfig>,
 }
@@ -63,8 +88,10 @@ pub struct Groups {
 /// is governed by the group's mode in `[groups.reputation]`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReputationConfig {
+    /// Maximum requests per second allowed from a single source IP.
     #[serde(default = "default_reputation_per_second")]
     pub per_second: u32,
+    /// IP addresses that are always blocked regardless of rate.
     #[serde(default)]
     pub deny_list: Vec<String>,
 }
@@ -77,13 +104,19 @@ impl Default for ReputationConfig {
     }
 }
 
+/// Top-level WAF configuration parsed from TOML or JSON.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Global enforcement mode applied to all detector groups.
     pub mode: Mode,
+    /// Action to take when the WAF encounters an internal error.
     pub fail_mode: FailMode,
+    /// Body-inspection size limit and over-cap policy.
     pub body: BodyConfig,
+    /// Per-group enable and mode overrides.
     #[serde(default)]
     pub groups: Groups,
+    /// Reputation detector tuning (rate limit and deny list).
     #[serde(default)]
     pub reputation: ReputationConfig,
 }

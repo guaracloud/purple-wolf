@@ -1,3 +1,4 @@
+//! Audit-log types and serialization helpers.
 use crate::policy::{Action, Decision};
 use crate::request::Request;
 use serde::Serialize;
@@ -5,23 +6,31 @@ use serde::Serialize;
 /// One audit-log line. Emitted for any request with verdicts.
 #[derive(Debug, Serialize, PartialEq)]
 pub struct AuditEntry {
+    /// Lowercased hostname from the request.
     pub host: String,
+    /// Request path as received.
     pub path: String,
     /// Raw query string (verbatim), if any. Preserved so the audit log shows
     /// the attack payload's location when it sits in query params.
     pub query: Option<String>,
+    /// HTTP method, upper-cased.
     pub method: String,
+    /// Source IP address as a string.
     pub source_ip: String,
+    /// Final action taken: `"allow"` or `"block"`.
     pub action: String,
+    /// Identifier of the rule that caused a block, if any.
     pub blocked_rule: Option<String>,
     /// Severity of the blocking verdict, if any (e.g. "high", "critical").
     pub blocked_severity: Option<String>,
     /// Free-form detail from the blocking verdict, if any.
     pub blocked_detail: Option<String>,
+    /// Rules that would have blocked but were not enforced.
     pub would_block_rules: Vec<String>,
 }
 
 impl AuditEntry {
+    /// Build an `AuditEntry` from a request and the corresponding decision.
     pub fn from(req: &Request, decision: &Decision) -> AuditEntry {
         AuditEntry {
             host: req.host.clone(),
