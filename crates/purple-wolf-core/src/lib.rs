@@ -6,6 +6,7 @@
 //! `wasm32-wasip1`.
 
 // Modules added by subsequent tasks.
+pub mod audit;
 pub mod clock;
 pub mod config;
 pub mod detectors;
