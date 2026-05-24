@@ -98,10 +98,14 @@ impl Default for WireBody {
     }
 }
 
+fn default_group(enabled: bool, mode: core::GroupMode) -> core::GroupConfig {
+    core::GroupConfig { enabled, mode }
+}
+
 /// Parse the raw JSON bytes Traefik hands the plugin.
 pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
     let w: Wire = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    Ok(core::Config {
+    let mut cfg = core::Config {
         mode: w.mode,
         fail_mode: w.fail_mode.into(),
         body: core::BodyConfig {
@@ -110,7 +114,20 @@ pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
         },
         groups: w.groups,
         reputation: w.reputation.into(),
-    })
+    };
+    cfg.groups
+        .injection
+        .get_or_insert(default_group(true, core::GroupMode::Enforce));
+    cfg.groups
+        .signatures
+        .get_or_insert(default_group(true, core::GroupMode::Enforce));
+    cfg.groups
+        .structural
+        .get_or_insert(default_group(true, core::GroupMode::Monitor));
+    cfg.groups
+        .reputation
+        .get_or_insert(default_group(false, core::GroupMode::Monitor));
+    Ok(cfg)
 }
 
 #[cfg(test)]
@@ -144,5 +161,56 @@ mod tests {
         assert_eq!(cfg.fail_mode, core::FailMode::FailOpen);
         assert_eq!(cfg.body.max_inspect_bytes, 1_048_576);
         assert_eq!(cfg.body.over_cap, core::OverCap::Pass);
+    }
+
+    #[test]
+    fn missing_groups_get_documented_defaults() {
+        let json = br#"{ "mode": "enforce" }"#;
+        let cfg = parse(json).expect("parse");
+
+        let inj = cfg
+            .groups
+            .injection
+            .as_ref()
+            .expect("injection default applied");
+        assert!(inj.enabled);
+        assert_eq!(inj.mode, core::GroupMode::Enforce);
+
+        let sig = cfg
+            .groups
+            .signatures
+            .as_ref()
+            .expect("signatures default applied");
+        assert!(sig.enabled);
+        assert_eq!(sig.mode, core::GroupMode::Enforce);
+
+        let str_ = cfg
+            .groups
+            .structural
+            .as_ref()
+            .expect("structural default applied");
+        assert!(str_.enabled);
+        assert_eq!(str_.mode, core::GroupMode::Monitor);
+
+        let rep = cfg
+            .groups
+            .reputation
+            .as_ref()
+            .expect("reputation default applied");
+        assert!(!rep.enabled); // reputation is documented OFF by default
+        assert_eq!(rep.mode, core::GroupMode::Monitor);
+    }
+
+    #[test]
+    fn explicit_group_overrides_default() {
+        // A tenant explicitly disabling structural must stay disabled even though
+        // the adapter would otherwise apply a default.
+        let json = br#"{
+          "mode": "enforce",
+          "groups": { "structural": { "enabled": false, "mode": "monitor" } }
+        }"#;
+        let cfg = parse(json).expect("parse");
+        let str_ = cfg.groups.structural.as_ref().expect("structural present");
+        assert!(!str_.enabled);
     }
 }
