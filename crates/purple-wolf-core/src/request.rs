@@ -159,24 +159,45 @@ mod tests {
     #[test]
     fn decodes_query_params() {
         let v = Request::build(
-            "get", "Example.COM", "/search",
-            "q=%27%20OR%201%3D1", vec![], vec![], false, ip(),
+            "get",
+            "Example.COM",
+            "/search",
+            "q=%27%20OR%201%3D1",
+            vec![],
+            vec![],
+            false,
+            ip(),
         );
         assert_eq!(v.method, "GET");
         assert_eq!(v.host, "example.com");
-        assert_eq!(v.query_params, vec![("q".to_string(), "' OR 1=1".to_string())]);
+        assert_eq!(
+            v.query_params,
+            vec![("q".to_string(), "' OR 1=1".to_string())]
+        );
     }
 
     #[test]
     fn inspectable_fields_skips_uninspected_body() {
         let v = Request::build(
-            "POST", "h", "/p", "a=1",
-            vec![], b"payload".to_vec(), false, ip(),
+            "POST",
+            "h",
+            "/p",
+            "a=1",
+            vec![],
+            b"payload".to_vec(),
+            false,
+            ip(),
         );
         assert!(!v.inspectable_fields().contains(&"payload"));
         let v2 = Request::build(
-            "POST", "h", "/p", "a=1",
-            vec![], b"payload".to_vec(), true, ip(),
+            "POST",
+            "h",
+            "/p",
+            "a=1",
+            vec![],
+            b"payload".to_vec(),
+            true,
+            ip(),
         );
         assert!(v2.inspectable_fields().contains(&"payload"));
     }
@@ -184,24 +205,32 @@ mod tests {
     #[test]
     fn raw_query_is_preserved_when_present_and_none_when_empty() {
         let v = Request::build(
-            "GET", "h", "/s", "q=%27%20OR%201%3D1",
-            vec![], vec![], false, ip(),
+            "GET",
+            "h",
+            "/s",
+            "q=%27%20OR%201%3D1",
+            vec![],
+            vec![],
+            false,
+            ip(),
         );
         assert_eq!(v.raw_query(), Some("q=%27%20OR%201%3D1"));
 
-        let v2 = Request::build(
-            "GET", "h", "/s", "",
-            vec![], vec![], false, ip(),
-        );
+        let v2 = Request::build("GET", "h", "/s", "", vec![], vec![], false, ip());
         assert_eq!(v2.raw_query(), None);
     }
 
     #[test]
     fn header_lookup_is_case_insensitive() {
         let v = Request::build(
-            "GET", "h", "/", "",
+            "GET",
+            "h",
+            "/",
+            "",
             vec![("User-Agent".to_string(), "curl".to_string())],
-            vec![], false, ip(),
+            vec![],
+            false,
+            ip(),
         );
         assert_eq!(v.header("user-agent"), Some("curl"));
     }
@@ -211,7 +240,10 @@ mod tests {
     #[test]
     fn client_ip_uses_xff_single() {
         let h = vec![("x-forwarded-for".to_string(), "203.0.113.7".to_string())];
-        assert_eq!(client_ip(&h, peer()), "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&h, peer()),
+            "203.0.113.7".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]
@@ -220,7 +252,10 @@ mod tests {
             "x-forwarded-for".to_string(),
             " 203.0.113.7 , 10.0.0.1 , 10.0.0.2".to_string(),
         )];
-        assert_eq!(client_ip(&h, peer()), "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&h, peer()),
+            "203.0.113.7".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]
@@ -229,13 +264,19 @@ mod tests {
             "x-forwarded-for".to_string(),
             "not-an-ip, 198.51.100.5".to_string(),
         )];
-        assert_eq!(client_ip(&h, peer()), "198.51.100.5".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&h, peer()),
+            "198.51.100.5".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]
     fn client_ip_uses_x_real_ip_when_no_xff() {
         let h = vec![("x-real-ip".to_string(), "198.51.100.9".to_string())];
-        assert_eq!(client_ip(&h, peer()), "198.51.100.9".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&h, peer()),
+            "198.51.100.9".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]

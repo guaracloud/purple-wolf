@@ -44,8 +44,16 @@ mod tests {
     use std::net::IpAddr;
 
     fn req_with_query(q: &str) -> Request {
-        Request::build("GET", "h", "/s", q, vec![], vec![], false,
-            "1.2.3.4".parse::<IpAddr>().unwrap())
+        Request::build(
+            "GET",
+            "h",
+            "/s",
+            q,
+            vec![],
+            vec![],
+            false,
+            "1.2.3.4".parse::<IpAddr>().unwrap(),
+        )
     }
 
     #[test]

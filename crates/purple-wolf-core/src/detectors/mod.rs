@@ -2,12 +2,12 @@
 
 /// SQLi/XSS detector backed by libinjection.
 pub mod injection;
+/// Per-IP rate limiter and static deny-list detector.
+pub mod reputation;
 /// Literal-pattern signature detector using Aho-Corasick multi-pattern search.
 pub mod signatures;
 /// Structural anomaly detector for HTTP method and header limits.
 pub mod structural;
-/// Per-IP rate limiter and static deny-list detector.
-pub mod reputation;
 
 use crate::request::Request;
 
@@ -115,7 +115,9 @@ mod tests {
 
     struct AlwaysHit(Group);
     impl Detector for AlwaysHit {
-        fn group(&self) -> Group { self.0 }
+        fn group(&self) -> Group {
+            self.0
+        }
         fn inspect(&self, _req: &Request) -> Vec<Verdict> {
             vec![Verdict {
                 group: self.0,
@@ -127,8 +129,16 @@ mod tests {
     }
 
     fn req() -> Request {
-        Request::build("GET", "h", "/", "", vec![], vec![], false,
-            "1.2.3.4".parse::<IpAddr>().unwrap())
+        Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![],
+            vec![],
+            false,
+            "1.2.3.4".parse::<IpAddr>().unwrap(),
+        )
     }
 
     #[test]

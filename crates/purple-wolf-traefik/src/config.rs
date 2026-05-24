@@ -33,17 +33,25 @@ struct WireReputation {
     deny_list: Vec<String>,
 }
 
-fn default_per_second() -> u32 { 100 }
+fn default_per_second() -> u32 {
+    100
+}
 
 impl Default for WireReputation {
     fn default() -> Self {
-        WireReputation { per_second: default_per_second(), deny_list: Vec::new() }
+        WireReputation {
+            per_second: default_per_second(),
+            deny_list: Vec::new(),
+        }
     }
 }
 
 impl From<WireReputation> for core::ReputationConfig {
     fn from(w: WireReputation) -> Self {
-        core::ReputationConfig { per_second: w.per_second, deny_list: w.deny_list }
+        core::ReputationConfig {
+            per_second: w.per_second,
+            deny_list: w.deny_list,
+        }
     }
 }
 
@@ -61,7 +69,9 @@ struct Wire {
     reputation: WireReputation,
 }
 
-fn default_fail_mode() -> WireFailMode { WireFailMode::FailOpen }
+fn default_fail_mode() -> WireFailMode {
+    WireFailMode::FailOpen
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,12 +82,19 @@ struct WireBody {
     over_cap: core::OverCap,
 }
 
-fn default_max_inspect_bytes() -> usize { 1_048_576 }
-fn default_over_cap() -> core::OverCap { core::OverCap::Pass }
+fn default_max_inspect_bytes() -> usize {
+    1_048_576
+}
+fn default_over_cap() -> core::OverCap {
+    core::OverCap::Pass
+}
 
 impl Default for WireBody {
     fn default() -> Self {
-        WireBody { max_inspect_bytes: default_max_inspect_bytes(), over_cap: default_over_cap() }
+        WireBody {
+            max_inspect_bytes: default_max_inspect_bytes(),
+            over_cap: default_over_cap(),
+        }
     }
 }
 
@@ -87,7 +104,10 @@ pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
     Ok(core::Config {
         mode: w.mode,
         fail_mode: w.fail_mode.into(),
-        body: core::BodyConfig { max_inspect_bytes: w.body.max_inspect_bytes, over_cap: w.body.over_cap },
+        body: core::BodyConfig {
+            max_inspect_bytes: w.body.max_inspect_bytes,
+            over_cap: w.body.over_cap,
+        },
         groups: w.groups,
         reputation: w.reputation.into(),
     })

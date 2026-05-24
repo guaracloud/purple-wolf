@@ -3,7 +3,7 @@ use proptest::prelude::*;
 use purple_wolf_core::config::{GroupMode, Mode};
 use purple_wolf_core::detectors::{Group, Severity, Verdict};
 use purple_wolf_core::policy::{self, Action};
-use purple_wolf_core::request::{Request, client_ip};
+use purple_wolf_core::request::{client_ip, Request};
 use std::net::{IpAddr, Ipv4Addr};
 
 fn any_group() -> impl Strategy<Value = Group> {

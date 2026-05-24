@@ -25,7 +25,7 @@ fn main() {
         build
             .compiler(&clang)
             .archiver(&archiver)
-            .flag(&format!("--sysroot={sysroot}"))
+            .flag(format!("--sysroot={sysroot}"))
             .flag("--target=wasm32-wasi")
             .flag("-fno-exceptions")
             .flag("-D_WASI_EMULATED_PROCESS_CLOCKS");

@@ -17,12 +17,16 @@ pub struct SystemClock {
 impl SystemClock {
     /// Construct a SystemClock whose epoch is `now`.
     pub fn new() -> SystemClock {
-        SystemClock { epoch: std::time::Instant::now() }
+        SystemClock {
+            epoch: std::time::Instant::now(),
+        }
     }
 }
 
 impl Default for SystemClock {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Clock for SystemClock {

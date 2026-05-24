@@ -63,8 +63,12 @@ pub struct GroupConfig {
     pub mode: GroupMode,
 }
 
-fn default_true() -> bool { true }
-fn default_group_mode() -> GroupMode { GroupMode::Enforce }
+fn default_true() -> bool {
+    true
+}
+fn default_group_mode() -> GroupMode {
+    GroupMode::Enforce
+}
 
 /// Per-group configuration, one entry for each built-in detector group.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -96,11 +100,16 @@ pub struct ReputationConfig {
     pub deny_list: Vec<String>,
 }
 
-fn default_reputation_per_second() -> u32 { 100 }
+fn default_reputation_per_second() -> u32 {
+    100
+}
 
 impl Default for ReputationConfig {
     fn default() -> ReputationConfig {
-        ReputationConfig { per_second: default_reputation_per_second(), deny_list: Vec::new() }
+        ReputationConfig {
+            per_second: default_reputation_per_second(),
+            deny_list: Vec::new(),
+        }
     }
 }
 
@@ -233,6 +242,9 @@ mod tests {
         }"#;
         let cfg_json = Config::parse_json(json).expect("JSON with reputation should parse");
         assert_eq!(cfg_json.reputation.per_second, 25);
-        assert_eq!(cfg_json.reputation.deny_list, vec!["10.0.0.1", "203.0.113.5"]);
+        assert_eq!(
+            cfg_json.reputation.deny_list,
+            vec!["10.0.0.1", "203.0.113.5"]
+        );
     }
 }

@@ -6,13 +6,16 @@
 //! either the query string of `uri:` (GET tests) or the body of `data:`
 //! (POST tests). We scrape both — intentionally lossy — and feed each as a
 //! query value. The threshold absorbs the noise.
-use purple_wolf_core::detectors::{Engine, Group,
-    injection::InjectionDetector, signatures::SignatureDetector};
+use purple_wolf_core::detectors::{
+    injection::InjectionDetector, signatures::SignatureDetector, Engine, Group,
+};
 use purple_wolf_core::request::Request;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 
-fn ip() -> IpAddr { IpAddr::V4(Ipv4Addr::LOCALHOST) }
+fn ip() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
 
 fn corpus_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is the purple-wolf-core crate dir; corpus lives
@@ -21,8 +24,16 @@ fn corpus_root() -> PathBuf {
 }
 
 fn run_engine_over(payload: &str) -> bool {
-    let req = Request::build("GET", "h", "/", &format!("q={payload}"),
-        vec![], vec![], false, ip());
+    let req = Request::build(
+        "GET",
+        "h",
+        "/",
+        &format!("q={payload}"),
+        vec![],
+        vec![],
+        false,
+        ip(),
+    );
     let engine = Engine::new(vec![
         Box::new(InjectionDetector),
         Box::new(SignatureDetector::new()),
@@ -42,8 +53,12 @@ fn run_engine_over(payload: &str) -> bool {
 fn extract_payloads(crs_dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(crs_dir).into_iter().flatten() {
-        if !entry.file_type().is_file() { continue; }
-        if entry.path().extension().and_then(|s| s.to_str()) != Some("yaml") { continue; }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.path().extension().and_then(|s| s.to_str()) != Some("yaml") {
+            continue;
+        }
         let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
         let mut skip_block: bool = false;
         for line in content.lines() {
@@ -55,7 +70,9 @@ fn extract_payloads(crs_dir: &Path) -> Vec<String> {
                 let looks_like_key = trimmed.contains(':')
                     && !trimmed.starts_with('#')
                     && trimmed.split(':').next().is_some_and(|k| {
-                        !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                        !k.is_empty()
+                            && k.chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
                     });
                 if trimmed.is_empty() || looks_like_key || trimmed.starts_with('-') {
                     skip_block = false;
@@ -72,12 +89,16 @@ fn extract_payloads(crs_dir: &Path) -> Vec<String> {
                     continue;
                 }
                 let payload = strip_yaml_quotes(rest);
-                if !payload.is_empty() { out.push(payload); }
+                if !payload.is_empty() {
+                    out.push(payload);
+                }
             } else if let Some(rest) = trimmed.strip_prefix("uri:") {
                 let rest = strip_yaml_quotes(rest.trim());
                 // Take the query portion only — the attack lives after `?`.
                 if let Some(q) = rest.split_once('?').map(|(_, q)| q) {
-                    if !q.is_empty() { out.push(q.to_string()); }
+                    if !q.is_empty() {
+                        out.push(q.to_string());
+                    }
                 }
             }
         }
@@ -99,7 +120,11 @@ fn strip_yaml_quotes(s: &str) -> String {
 fn detect_rate(payloads: &[String]) -> (usize, usize, f64) {
     let total = payloads.len();
     let detected = payloads.iter().filter(|p| run_engine_over(p)).count();
-    let pct = if total == 0 { 0.0 } else { (detected as f64) / (total as f64) };
+    let pct = if total == 0 {
+        0.0
+    } else {
+        (detected as f64) / (total as f64)
+    };
     (detected, total, pct)
 }
 
@@ -112,17 +137,24 @@ fn crs_attack_corpus_is_mostly_detected() {
     }
 
     // Diagnostic breakdown per subfolder — useful when the aggregate drifts.
-    for sub in ["REQUEST-941-APPLICATION-ATTACK-XSS",
-                "REQUEST-942-APPLICATION-ATTACK-SQLI"] {
+    for sub in [
+        "REQUEST-941-APPLICATION-ATTACK-XSS",
+        "REQUEST-942-APPLICATION-ATTACK-SQLI",
+    ] {
         let p = dir.join(sub);
-        if !p.exists() { continue; }
+        if !p.exists() {
+            continue;
+        }
         let payloads = extract_payloads(&p);
         let (d, t, pct) = detect_rate(&payloads);
         eprintln!("CRS {sub}: {d}/{t} = {pct:.2}");
     }
 
     let payloads = extract_payloads(&dir);
-    assert!(!payloads.is_empty(), "no payloads extracted from CRS corpus at {dir:?}");
+    assert!(
+        !payloads.is_empty(),
+        "no payloads extracted from CRS corpus at {dir:?}"
+    );
     let (detected, total, pct) = detect_rate(&payloads);
     eprintln!("CRS detection (aggregate): {detected}/{total} = {pct:.2}");
 
@@ -156,11 +188,12 @@ fn crs_attack_corpus_is_mostly_detected() {
 #[test]
 fn benign_corpus_has_no_false_positives() {
     let path = corpus_root().join("clean/clean.txt");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let mut fps = Vec::new();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        if run_engine_over(line) { fps.push(line.to_string()); }
+        if run_engine_over(line) {
+            fps.push(line.to_string());
+        }
     }
     assert!(fps.is_empty(), "false positives on benign inputs: {fps:?}");
 }

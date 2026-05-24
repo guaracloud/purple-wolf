@@ -1,0 +1,29 @@
+name: bench
+on:
+  pull_request:
+    paths:
+      - 'crates/purple-wolf-core/**'
+      - '.github/workflows/bench.yml'
+
+jobs:
+  bench-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Establish baseline from main
+        run: |
+          git fetch origin main
+          git checkout origin/main -- crates/purple-wolf-core
+          cargo bench -p purple-wolf-core --bench pipeline -- --save-baseline main
+          git checkout HEAD -- crates/purple-wolf-core
+      - name: Compare PR against baseline (fail >10% regression)
+        run: |
+          cargo bench -p purple-wolf-core --bench pipeline -- --baseline main \
+            --noise-threshold 0.10 --significance-level 0.05 2>&1 | tee bench.txt
+          # criterion exits 0 even on regression; parse the report and gate.
+          if grep -E 'Performance has regressed' bench.txt; then
+            echo "::error::bench regression detected (>10%)"; exit 1
+          fi

@@ -29,7 +29,10 @@ impl Detector for StructuralDetector {
                 group: Group::Structural,
                 rule: "headers_too_large",
                 severity: Severity::Medium,
-                detail: format!("{} header bytes exceeds {}", req.header_bytes, MAX_HEADER_BYTES),
+                detail: format!(
+                    "{} header bytes exceeds {}",
+                    req.header_bytes, MAX_HEADER_BYTES
+                ),
             });
         }
         if req.headers.len() > MAX_HEADER_COUNT {
@@ -49,7 +52,9 @@ mod tests {
     use super::*;
     use std::net::IpAddr;
 
-    fn ip() -> IpAddr { "1.2.3.4".parse().unwrap() }
+    fn ip() -> IpAddr {
+        "1.2.3.4".parse().unwrap()
+    }
 
     #[test]
     fn flags_disallowed_method() {
@@ -77,8 +82,16 @@ mod tests {
 
     #[test]
     fn normal_request_is_clean() {
-        let req = Request::build("GET", "h", "/", "",
-            vec![("accept".into(), "*/*".into())], vec![], false, ip());
+        let req = Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![("accept".into(), "*/*".into())],
+            vec![],
+            false,
+            ip(),
+        );
         assert!(StructuralDetector.inspect(&req).is_empty());
     }
 }

@@ -43,17 +43,15 @@ impl AuditEntry {
                 Action::Block => "block",
             }
             .to_string(),
-            blocked_rule: decision.blocked_by.as_ref().map(|v| {
-                format!("{}/{}", v.group.as_str(), v.rule)
-            }),
+            blocked_rule: decision
+                .blocked_by
+                .as_ref()
+                .map(|v| format!("{}/{}", v.group.as_str(), v.rule)),
             blocked_severity: decision
                 .blocked_by
                 .as_ref()
                 .map(|v| v.severity.as_str().to_string()),
-            blocked_detail: decision
-                .blocked_by
-                .as_ref()
-                .map(|v| v.detail.clone()),
+            blocked_detail: decision.blocked_by.as_ref().map(|v| v.detail.clone()),
             would_block_rules: decision
                 .would_block
                 .iter()
@@ -72,7 +70,8 @@ impl AuditEntry {
 /// emission via the deployment's logging mechanism (host `log()` in WASM,
 /// stdout in a native deployment).
 pub fn to_log_line(entry: &AuditEntry) -> String {
-    serde_json::to_string(entry).unwrap_or_else(|_| String::from("{\"error\":\"audit serialize failed\"}"))
+    serde_json::to_string(entry)
+        .unwrap_or_else(|_| String::from("{\"error\":\"audit serialize failed\"}"))
 }
 
 #[cfg(test)]
@@ -82,13 +81,29 @@ mod tests {
     use std::net::IpAddr;
 
     fn req() -> Request {
-        Request::build("GET", "Host", "/p", "", vec![], vec![], false,
-            "1.2.3.4".parse::<IpAddr>().unwrap())
+        Request::build(
+            "GET",
+            "Host",
+            "/p",
+            "",
+            vec![],
+            vec![],
+            false,
+            "1.2.3.4".parse::<IpAddr>().unwrap(),
+        )
     }
 
     fn req_with_query(q: &str) -> Request {
-        Request::build("GET", "Host", "/p", q, vec![], vec![], false,
-            "1.2.3.4".parse::<IpAddr>().unwrap())
+        Request::build(
+            "GET",
+            "Host",
+            "/p",
+            q,
+            vec![],
+            vec![],
+            false,
+            "1.2.3.4".parse::<IpAddr>().unwrap(),
+        )
     }
 
     #[test]
@@ -96,8 +111,10 @@ mod tests {
         let decision = Decision {
             action: Action::Block,
             blocked_by: Some(Verdict {
-                group: Group::Injection, rule: "sqli",
-                severity: Severity::Critical, detail: "d".into(),
+                group: Group::Injection,
+                rule: "sqli",
+                severity: Severity::Critical,
+                detail: "d".into(),
             }),
             would_block: vec![],
         };
@@ -115,8 +132,10 @@ mod tests {
         let decision = Decision {
             action: Action::Block,
             blocked_by: Some(Verdict {
-                group: Group::Injection, rule: "sqli",
-                severity: Severity::High, detail: "payload in q".into(),
+                group: Group::Injection,
+                rule: "sqli",
+                severity: Severity::High,
+                detail: "payload in q".into(),
             }),
             would_block: vec![],
         };
@@ -128,7 +147,11 @@ mod tests {
 
     #[test]
     fn clean_request_is_not_noteworthy() {
-        let decision = Decision { action: Action::Allow, blocked_by: None, would_block: vec![] };
+        let decision = Decision {
+            action: Action::Allow,
+            blocked_by: None,
+            would_block: vec![],
+        };
         let entry = AuditEntry::from(&req(), &decision);
         assert!(!entry.is_noteworthy());
         assert_eq!(entry.blocked_severity, None);

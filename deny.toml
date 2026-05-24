@@ -11,6 +11,10 @@ confidence-threshold = 0.92
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Allow wildcard versions only for path/git deps — those are workspace-internal
+# crates (e.g. purple-wolf-traefik -> purple-wolf-core) where pinning a
+# version would just duplicate the workspace version.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

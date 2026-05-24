@@ -343,7 +343,10 @@ fn drain_request_body(max: usize) -> BodyRead {
         // more on the next loop iteration to detect leftover bytes; the loop
         // above will set `exceeded = true` on the next non-empty read.
     }
-    BodyRead { bytes: out, exceeded }
+    BodyRead {
+        bytes: out,
+        exceeded,
+    }
 }
 
 // ---------------------------------------------------------------------------

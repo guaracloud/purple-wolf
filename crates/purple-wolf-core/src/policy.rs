@@ -49,7 +49,11 @@ pub fn decide(
     }
 
     Decision {
-        action: if blocked_by.is_some() { Action::Block } else { Action::Allow },
+        action: if blocked_by.is_some() {
+            Action::Block
+        } else {
+            Action::Allow
+        },
         blocked_by,
         would_block,
     }
@@ -61,26 +65,37 @@ mod tests {
     use crate::detectors::Severity;
 
     fn verdict(group: Group) -> Verdict {
-        Verdict { group, rule: "t", severity: Severity::High, detail: "d".into() }
+        Verdict {
+            group,
+            rule: "t",
+            severity: Severity::High,
+            detail: "d".into(),
+        }
     }
 
     #[test]
     fn blocks_when_global_and_group_enforce() {
-        let d = decide(vec![verdict(Group::Injection)], Mode::Enforce, |_| GroupMode::Enforce);
+        let d = decide(vec![verdict(Group::Injection)], Mode::Enforce, |_| {
+            GroupMode::Enforce
+        });
         assert_eq!(d.action, Action::Block);
         assert!(d.blocked_by.is_some());
     }
 
     #[test]
     fn monitor_global_never_blocks() {
-        let d = decide(vec![verdict(Group::Injection)], Mode::Monitor, |_| GroupMode::Enforce);
+        let d = decide(vec![verdict(Group::Injection)], Mode::Monitor, |_| {
+            GroupMode::Enforce
+        });
         assert_eq!(d.action, Action::Allow);
         assert_eq!(d.would_block.len(), 1);
     }
 
     #[test]
     fn group_mode_off_is_ignored() {
-        let d = decide(vec![verdict(Group::Injection)], Mode::Enforce, |_| GroupMode::Off);
+        let d = decide(vec![verdict(Group::Injection)], Mode::Enforce, |_| {
+            GroupMode::Off
+        });
         assert_eq!(d.action, Action::Allow);
         assert!(d.would_block.is_empty());
     }

@@ -34,6 +34,12 @@ impl SignatureDetector {
     }
 }
 
+impl Default for SignatureDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Detector for SignatureDetector {
     fn group(&self) -> Group {
         Group::Signatures
@@ -66,28 +72,56 @@ mod tests {
     use super::*;
     use std::net::IpAddr;
 
-    fn ip() -> IpAddr { "1.2.3.4".parse().unwrap() }
+    fn ip() -> IpAddr {
+        "1.2.3.4".parse().unwrap()
+    }
 
     #[test]
     fn flags_path_traversal() {
-        let req = Request::build("GET", "h", "/files", "f=../../etc/passwd",
-            vec![], vec![], false, ip());
+        let req = Request::build(
+            "GET",
+            "h",
+            "/files",
+            "f=../../etc/passwd",
+            vec![],
+            vec![],
+            false,
+            ip(),
+        );
         let v = SignatureDetector::new().inspect(&req);
-        assert!(v.iter().any(|x| x.rule == "path_traversal" || x.rule == "lfi"));
+        assert!(v
+            .iter()
+            .any(|x| x.rule == "path_traversal" || x.rule == "lfi"));
     }
 
     #[test]
     fn flags_scanner_user_agent() {
-        let req = Request::build("GET", "h", "/", "",
-            vec![("user-agent".into(), "sqlmap/1.7".into())], vec![], false, ip());
+        let req = Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![("user-agent".into(), "sqlmap/1.7".into())],
+            vec![],
+            false,
+            ip(),
+        );
         let v = SignatureDetector::new().inspect(&req);
         assert!(v.iter().any(|x| x.rule == "scanner_ua"));
     }
 
     #[test]
     fn benign_request_is_clean() {
-        let req = Request::build("GET", "h", "/about", "ref=home",
-            vec![("user-agent".into(), "Mozilla/5.0".into())], vec![], false, ip());
+        let req = Request::build(
+            "GET",
+            "h",
+            "/about",
+            "ref=home",
+            vec![("user-agent".into(), "Mozilla/5.0".into())],
+            vec![],
+            false,
+            ip(),
+        );
         assert!(SignatureDetector::new().inspect(&req).is_empty());
     }
 }

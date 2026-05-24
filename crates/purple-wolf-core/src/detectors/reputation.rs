@@ -58,7 +58,16 @@ mod tests {
     use super::*;
 
     fn req_from(ip: &str) -> Request {
-        Request::build("GET", "h", "/", "", vec![], vec![], false, ip.parse().unwrap())
+        Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![],
+            vec![],
+            false,
+            ip.parse().unwrap(),
+        )
     }
 
     #[test]
@@ -73,7 +82,11 @@ mod tests {
         let det = ReputationDetector::new(1, vec![]);
         let mut limited = false;
         for _ in 0..50 {
-            if det.inspect(&req_from("5.5.5.5")).iter().any(|x| x.rule == "rate_limited") {
+            if det
+                .inspect(&req_from("5.5.5.5"))
+                .iter()
+                .any(|x| x.rule == "rate_limited")
+            {
                 limited = true;
             }
         }
