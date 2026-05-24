@@ -1,9 +1,7 @@
 //! FFI bindings for vendored libinjection. This is the only `unsafe` boundary.
 
-#[cfg(not(purple_wolf_no_libinjection))]
 use std::os::raw::{c_char, c_int};
 
-#[cfg(not(purple_wolf_no_libinjection))]
 extern "C" {
     /// Returns 1 if `input` looks like SQL injection. `fingerprint` must be a
     /// buffer of at least 8 bytes; libinjection writes the matched fingerprint.
@@ -14,7 +12,6 @@ extern "C" {
 }
 
 /// Safe wrapper: is `s` SQL injection?
-#[cfg(not(purple_wolf_no_libinjection))]
 pub fn is_sqli(s: &str) -> bool {
     // `c_char` is `i8` on most targets but `u8` on aarch64 Linux; using
     // `0 as c_char` keeps the buffer element type matching the FFI parameter.
@@ -28,7 +25,6 @@ pub fn is_sqli(s: &str) -> bool {
 }
 
 /// Safe wrapper: is `s` cross-site scripting?
-#[cfg(not(purple_wolf_no_libinjection))]
 pub fn is_xss(s: &str) -> bool {
     // SAFETY: pointer + length describe `s`.
     let r = unsafe { libinjection_xss(s.as_ptr() as *const c_char, s.len()) };
@@ -37,7 +33,6 @@ pub fn is_xss(s: &str) -> bool {
     r == 1
 }
 
-#[cfg(not(purple_wolf_no_libinjection))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,9 +54,3 @@ mod tests {
         assert!(!is_xss("hello world"));
     }
 }
-
-#[cfg(purple_wolf_no_libinjection)]
-pub fn is_sqli(_s: &str) -> bool { false }
-
-#[cfg(purple_wolf_no_libinjection)]
-pub fn is_xss(_s: &str) -> bool { false }
