@@ -10,4 +10,5 @@ pub mod clock;
 pub mod config;
 pub mod detectors;
 pub mod ffi;
+pub mod policy;
 pub mod request;
