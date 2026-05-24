@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/purple-wolf-core", "crates/purple-wolf-traefik"]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.2.0-dev"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/guaracloud-oss/purple-wolf"
+homepage   = "https://github.com/guaracloud-oss/purple-wolf"
+readme = "README.md"
+
+[workspace.dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+aho-corasick = "1"
+governor   = { version = "0.6", default-features = false, features = ["std"] }
+percent-encoding = "2"
+
+# Size-optimised release for the WASM plugin artifact.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+# panic = "unwind" (default) is kept on purpose: the entry shim uses
+# catch_unwind for per-request panic isolation (spec section 7).

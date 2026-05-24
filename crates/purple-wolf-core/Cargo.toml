@@ -1,0 +1,19 @@
+[package]
+name        = "purple-wolf-core"
+description = "WAF detection engine: hybrid SQLi/XSS, signature, structural, and reputation detectors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
+aho-corasick = { workspace = true }
+governor   = { workspace = true }
+percent-encoding = { workspace = true }
+
+[build-dependencies]
+cc = "1"
