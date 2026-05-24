@@ -17,8 +17,13 @@ percent-encoding = { workspace = true }
 toml       = "0.8"
 
 [dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 proptest = "1"
 walkdir = "2"
+
+[[bench]]
+name = "pipeline"
+harness = false
 
 [build-dependencies]
 cc = "1"
