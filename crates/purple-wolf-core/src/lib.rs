@@ -9,4 +9,5 @@
 pub mod clock;
 pub mod config;
 pub mod detectors;
+pub mod ffi;
 pub mod request;
