@@ -16,5 +16,8 @@ governor   = { workspace = true }
 percent-encoding = { workspace = true }
 toml       = "0.8"
 
+[dev-dependencies]
+proptest = "1"
+
 [build-dependencies]
 cc = "1"
