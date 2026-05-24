@@ -3,4 +3,6 @@
 //! Loaded once into a shared Traefik HA deployment; one plugin instance is
 //! constructed per `Middleware` CRD that references it.
 
+mod host;
+
 // Entry points added in a later task.
