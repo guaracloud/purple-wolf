@@ -14,6 +14,7 @@ serde_json = { workspace = true }
 aho-corasick = { workspace = true }
 governor   = { workspace = true }
 percent-encoding = { workspace = true }
+toml       = "0.8"
 
 [build-dependencies]
 cc = "1"

@@ -7,4 +7,5 @@
 
 // Modules added by subsequent tasks.
 pub mod clock;
+pub mod config;
 pub mod request;
