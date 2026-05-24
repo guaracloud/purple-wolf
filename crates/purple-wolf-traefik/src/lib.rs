@@ -4,6 +4,8 @@
 //! constructed per `Middleware` CRD that references it.
 
 mod config;
+mod entry;
 mod host;
 
-// Entry points added in a later task.
+// Re-export the exported functions so they appear in the .wasm export table.
+pub use entry::{handle_request, handle_response};
