@@ -41,7 +41,10 @@ rand               = "0.8"
 gethostname        = "0.4"
 
 [dev-dependencies]
-tokio    = { version = "1", features = ["test-util", "macros", "rt-multi-thread", "io-util", "sync", "time"] }
+tokio    = { version = "1", features = ["test-util", "macros", "rt-multi-thread", "io-util", "sync", "time", "process"] }
 wiremock = "0.6"
 proptest = "1"
 tempfile = "3"
+hex      = "0.4"
+hmac     = "0.12"
+sha2     = "0.10"
