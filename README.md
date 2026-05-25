@@ -33,7 +33,7 @@ internet → Traefik (TLS, routing, your existing setup)
 ## Quick start (Traefik)
 
 1. **Get the plugin binary.** Download `purple-wolf.wasm` from the [latest
-   GitHub Release](https://github.com/guaracloud-oss/purple-wolf/releases),
+   GitHub Release](https://github.com/guaracloud/purple-wolf/releases),
    or build it yourself:
    ```bash
    WASI_SDK_PATH=/opt/wasi-sdk cargo build --release \
@@ -42,13 +42,13 @@ internet → Traefik (TLS, routing, your existing setup)
    ```
 
 2. **Install the plugin into Traefik** (one-time, platform level).
-   Place the file at `/plugins-local/src/github.com/guaracloud-oss/purple-wolf/purple-wolf.wasm`
+   Place the file at `/plugins-local/src/github.com/guaracloud/purple-wolf/purple-wolf.wasm`
    in your Traefik pods, and declare it in `traefik.yml`:
    ```yaml
    experimental:
      localPlugins:
        purpleWolf:
-         moduleName: github.com/guaracloud-oss/purple-wolf
+         moduleName: github.com/guaracloud/purple-wolf
    ```
 
 3. **Apply a Middleware** in your namespace. Start with monitor mode:

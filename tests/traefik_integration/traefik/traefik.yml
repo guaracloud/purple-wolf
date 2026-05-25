@@ -7,6 +7,6 @@ providers:
 experimental:
   localPlugins:
     purpleWolf:
-      moduleName: github.com/guaracloud-oss/purple-wolf
+      moduleName: github.com/guaracloud/purple-wolf
 log:
   level: INFO

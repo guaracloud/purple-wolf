@@ -11,6 +11,6 @@ services:
       - ./traefik:/etc/traefik:ro
       # Traefik local-plugin layout: <pluginsDir>/src/<moduleName>/
       # containing both .traefik.yml (manifest) and plugin.wasm (the binary).
-      - ./plugin/.traefik.yml:/plugins-local/src/github.com/guaracloud-oss/purple-wolf/.traefik.yml:ro
-      - ../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm:/plugins-local/src/github.com/guaracloud-oss/purple-wolf/plugin.wasm:ro
+      - ./plugin/.traefik.yml:/plugins-local/src/github.com/guaracloud/purple-wolf/.traefik.yml:ro
+      - ../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm:/plugins-local/src/github.com/guaracloud/purple-wolf/plugin.wasm:ro
     depends_on: [upstream]

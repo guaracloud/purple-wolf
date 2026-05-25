@@ -1,7 +1,7 @@
 displayName: purple-wolf
 type: middleware
 runtime: wasm
-import: github.com/guaracloud-oss/purple-wolf
+import: github.com/guaracloud/purple-wolf
 summary: |
   Hybrid Web Application Firewall: libinjection (SQLi/XSS), aho-corasick
   literal signatures, structural anomaly checks, per-IP rate limiting.
