@@ -34,8 +34,28 @@ impl Detector for InjectionDetector {
     }
 }
 
+/// Build a short, log-safe representation of an attacker-controlled string
+/// for the audit-log `blocked_detail` field.
+///
+/// - Truncates to 80 chars to keep log lines bounded.
+/// - Replaces ASCII control characters (`\x00..=\x1F`, `\x7f`) with `.` so
+///   a payload containing `\r\n` cannot force a downstream regex-based log
+///   parser to read across what it thinks is a line boundary. (`serde_json`
+///   escapes these inside the JSON string value, so the JSON line itself
+///   is intact — but Promtail / Loki / Vector regex pipelines commonly
+///   match against the unescaped substring, see NEW-I1 in the followup
+///   review.) Non-ASCII printable characters are preserved.
 fn truncate(s: &str) -> String {
-    s.chars().take(80).collect()
+    s.chars()
+        .take(80)
+        .map(|c| {
+            if (c as u32) < 0x20 || c == '\x7f' {
+                '.'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -120,6 +140,23 @@ mod tests {
             "sessionid=abc123; csrftoken=xyz789",
         ));
         assert!(v.is_empty(), "benign cookie should not flag: {v:?}");
+    }
+
+    /// Regression guard for NEW-I1: control characters in attacker payloads
+    /// must not survive into the audit-log detail string. Pre-fix, a
+    /// payload containing `\r\n{"action":"allow"}` would be wrapped in
+    /// JSON quotes — safe at the JSON-parser level, but regex-based log
+    /// pipelines could be fooled into reading "allow" as the audit action.
+    #[test]
+    fn truncate_replaces_control_chars() {
+        let dangerous = "1' OR '1'='1\r\n{\"action\":\"allow\"}\x00\x07";
+        let safe = super::truncate(dangerous);
+        assert!(!safe.contains('\r'), "CR must be stripped: {safe:?}");
+        assert!(!safe.contains('\n'), "LF must be stripped: {safe:?}");
+        assert!(!safe.contains('\x00'), "NUL must be stripped: {safe:?}");
+        assert!(!safe.contains('\x07'), "BEL must be stripped: {safe:?}");
+        // Printable content survives.
+        assert!(safe.starts_with("1' OR '1'='1"));
     }
 
     /// Regression guard for NEW-I4: percent-encoded SQLi in a Cookie value
