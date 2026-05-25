@@ -3,17 +3,21 @@ http:
     enforce:
       rule: "PathPrefix(`/e`)"
       service: echo
-      middlewares: [strict-waf]
+      middlewares: [strip-e, strict-waf]
     monitor:
       rule: "PathPrefix(`/m`)"
       service: echo
-      middlewares: [monitor-waf]
+      middlewares: [strip-m, monitor-waf]
   services:
     echo:
       loadBalancer:
         servers:
           - url: "http://upstream:8000"
   middlewares:
+    strip-e:
+      stripPrefix: { prefixes: ["/e"] }
+    strip-m:
+      stripPrefix: { prefixes: ["/m"] }
     strict-waf:
       plugin:
         purpleWolf:
