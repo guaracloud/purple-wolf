@@ -17,7 +17,14 @@ fn main() {
         .opt_level(2);
 
     if target.starts_with("wasm32-") {
-        // Cross-compile libinjection to wasm32 via wasi-sdk.
+        // Cross-compile libinjection to wasm32 via wasi-sdk. We pass
+        // `--target=wasm32-wasip1` to match Rust's target triple
+        // (NEW-M12 in the followup review). The older wasi-sdk releases
+        // only know `wasm32-wasi`; wasi-sdk 22+ accepts both. The
+        // vendored libinjection sources don't touch clocks or threading,
+        // so we also no longer pass `-D_WASI_EMULATED_PROCESS_CLOCKS` /
+        // `-lwasi-emulated-process-clocks` (NEW-M13) — they were dead
+        // flags and pulling the emulator in inflates the final wasm.
         let sdk = std::env::var("WASI_SDK_PATH").unwrap_or_else(|_| "/opt/wasi-sdk".into());
         let clang = format!("{sdk}/bin/clang");
         let archiver = format!("{sdk}/bin/llvm-ar");
@@ -26,10 +33,8 @@ fn main() {
             .compiler(&clang)
             .archiver(&archiver)
             .flag(format!("--sysroot={sysroot}"))
-            .flag("--target=wasm32-wasi")
-            .flag("-fno-exceptions")
-            .flag("-D_WASI_EMULATED_PROCESS_CLOCKS");
-        println!("cargo:rustc-link-arg=-lwasi-emulated-process-clocks");
+            .flag("--target=wasm32-wasip1")
+            .flag("-fno-exceptions");
     }
 
     build.compile("injection");

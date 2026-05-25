@@ -95,10 +95,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Coverage floor is intentionally below the 80% target because the
       # WASM host glue in purple-wolf-traefik (entry.rs, host.rs) cannot be
-      # exercised under `cargo test` — it needs a real wasm runtime. The
-      # core crate sits at ~95%; raise this floor as host-side integration
-      # coverage lands (e.g. via wasmtime-driven e2e tests).
-      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines 70
+      # fully exercised under `cargo test` — it needs a real wasm runtime.
+      # The core crate sits at ~95% and the traefik adapter at ~93% after
+      # the v0.2 hardening pass; the workspace floor was raised from 70 to
+      # 75% in that pass to catch the next coverage regression sooner
+      # (NEW-M11). Raise further as host-side integration coverage lands
+      # (e.g. via wasmtime-driven e2e tests).
+      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines 75
       - uses: actions/upload-artifact@v4
         with: { name: lcov, path: lcov.info }
 
