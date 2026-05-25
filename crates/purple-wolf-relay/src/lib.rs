@@ -9,7 +9,10 @@
 
 pub mod admin;
 pub mod config;
+pub mod enrichers;
+pub mod envelope;
 pub mod metrics;
+pub mod parser;
 pub mod pipeline;
 pub mod sources;
 
