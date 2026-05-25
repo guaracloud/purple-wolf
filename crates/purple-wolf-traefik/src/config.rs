@@ -262,6 +262,13 @@ struct Wire {
     reputation: WireReputation,
     #[serde(default)]
     xff: WireXff,
+    /// Operator-supplied labels. Validated against the core cap policy;
+    /// keys in the reserved `purple_wolf.*` prefix are dropped before
+    /// reaching `core::Config`, with one warning per dropped key surfaced
+    /// in the returned `Vec<String>` so the FFI layer can emit it via
+    /// `host::log`. See `docs/configuration.md` Labels section.
+    #[serde(default)]
+    labels: std::collections::BTreeMap<String, String>,
 }
 
 fn default_fail_mode() -> WireFailMode {
@@ -273,7 +280,13 @@ fn default_group(enabled: bool, mode: core::GroupMode) -> core::GroupConfig {
 }
 
 /// Parse the raw JSON bytes Traefik hands the plugin.
-pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
+///
+/// Returns the parsed `core::Config` together with a list of non-fatal
+/// warnings the FFI layer can route to `host::log` (e.g., labels in the
+/// reserved `purple_wolf.*` prefix that were silently dropped). A hard
+/// error in `Err` is fatal — the FFI layer falls back to the all-monitor
+/// safety config in that case.
+pub fn parse(bytes: &[u8]) -> Result<(core::Config, Vec<String>), String> {
     let w: Wire = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     // NEW-M7: range validation. Pre-fix the adapter silently coerced
     // `perSecond: 0` to 1 rps (most restrictive — looked like "disable"
@@ -292,6 +305,26 @@ pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
                 .to_string(),
         );
     }
+    // Drop reserved-prefix label keys before validation: operators must
+    // not be able to spoof `purple_wolf.middleware` / `purple_wolf.router`
+    // etc., which are reserved for fields the WAF or downstream relay
+    // sets. Drops are non-fatal so a tenant that copied an example with
+    // a reserved key doesn't lose their whole config; instead each drop
+    // surfaces as a warning the FFI layer can emit.
+    let mut labels = w.labels;
+    let mut warnings: Vec<String> = Vec::new();
+    let reserved: Vec<String> = labels
+        .keys()
+        .filter(|k| k.starts_with("purple_wolf."))
+        .cloned()
+        .collect();
+    for k in reserved {
+        labels.remove(&k);
+        warnings.push(format!(
+            "labels: ignoring operator-set reserved-prefix key {k:?} (purple_wolf.* is reserved)"
+        ));
+    }
+    core::validate_labels(&labels)?;
     let mut cfg = core::Config {
         mode: w.mode,
         fail_mode: w.fail_mode.into(),
@@ -302,6 +335,7 @@ pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
         groups: w.groups.into(),
         reputation: w.reputation.into(),
         xff: w.xff.into(),
+        labels,
     };
     cfg.groups
         .injection
@@ -315,7 +349,7 @@ pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
     cfg.groups
         .reputation
         .get_or_insert(default_group(false, core::GroupMode::Monitor));
-    Ok(cfg)
+    Ok((cfg, warnings))
 }
 
 #[cfg(test)]
@@ -334,7 +368,8 @@ mod tests {
           },
           "reputation": { "perSecond": 50, "denyList": ["1.2.3.4"] }
         }"#;
-        let cfg = parse(json).expect("parse");
+        let (cfg, warnings) = parse(json).expect("parse");
+        assert!(warnings.is_empty());
         assert_eq!(cfg.mode, core::Mode::Enforce);
         assert_eq!(cfg.fail_mode, core::FailMode::FailClosed);
         assert_eq!(cfg.body.max_inspect_bytes, 2048);
@@ -345,16 +380,17 @@ mod tests {
     #[test]
     fn defaults_when_optional_fields_absent() {
         let json = br#"{ "mode": "monitor" }"#;
-        let cfg = parse(json).expect("parse");
+        let (cfg, _warnings) = parse(json).expect("parse");
         assert_eq!(cfg.fail_mode, core::FailMode::FailOpen);
         assert_eq!(cfg.body.max_inspect_bytes, 1_048_576);
         assert_eq!(cfg.body.over_cap, core::OverCap::Pass);
+        assert!(cfg.labels.is_empty(), "labels default empty");
     }
 
     #[test]
     fn missing_groups_get_documented_defaults() {
         let json = br#"{ "mode": "enforce" }"#;
-        let cfg = parse(json).expect("parse");
+        let (cfg, _warnings) = parse(json).expect("parse");
 
         let inj = cfg
             .groups
@@ -395,7 +431,7 @@ mod tests {
           "mode": "enforce",
           "groups": { "structural": { "enabled": false, "mode": "monitor" } }
         }"#;
-        let cfg = parse(json).expect("parse");
+        let (cfg, _warnings) = parse(json).expect("parse");
         let str_ = cfg.groups.structural.as_ref().expect("structural present");
         assert!(!str_.enabled);
     }
@@ -518,11 +554,81 @@ mod tests {
           },
           "reputation": { "perSecond": "250", "denyList": ["9.9.9.9"] }
         }"#;
-        let cfg = parse(json).expect("parse stringified primitives");
+        let (cfg, _warnings) = parse(json).expect("parse stringified primitives");
         assert_eq!(cfg.body.max_inspect_bytes, 2048);
         assert!(cfg.groups.injection.as_ref().unwrap().enabled);
         assert!(!cfg.groups.signatures.as_ref().unwrap().enabled);
         assert_eq!(cfg.reputation.per_second, 250);
         assert_eq!(cfg.reputation.deny_list, vec!["9.9.9.9".to_string()]);
+    }
+
+    // ----- v0.3 labels -----
+
+    #[test]
+    fn parses_labels_round_trip() {
+        let json = br#"{
+          "mode": "enforce",
+          "labels": { "tenant": "acme", "service": "checkout" }
+        }"#;
+        let (cfg, warnings) = parse(json).expect("parse");
+        assert!(warnings.is_empty());
+        assert_eq!(cfg.labels.get("tenant").map(String::as_str), Some("acme"));
+        assert_eq!(
+            cfg.labels.get("service").map(String::as_str),
+            Some("checkout")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_label_key_at_parse_time() {
+        let json = br#"{"mode":"monitor","labels":{"BadKey":"v"}}"#;
+        let err = parse(json).expect_err("invalid key must error");
+        assert!(err.contains("BadKey"), "err: {err}");
+    }
+
+    #[test]
+    fn rejects_oversize_label_set_at_parse_time() {
+        let mut s = String::from(r#"{"mode":"monitor","labels":{"#);
+        for i in 0..33 {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push_str(&format!(r#""k{i:02}":"v""#));
+        }
+        s.push_str("}}");
+        let err = parse(s.as_bytes()).expect_err("too many keys must error");
+        assert!(err.contains("33"), "err: {err}");
+    }
+
+    #[test]
+    fn drops_reserved_purple_wolf_prefix_and_warns() {
+        let json = br#"{
+          "mode": "monitor",
+          "labels": {
+            "purple_wolf.middleware": "spoof",
+            "purple_wolf.router": "spoof2",
+            "tenant": "acme"
+          }
+        }"#;
+        let (cfg, warnings) = parse(json).expect("must still parse");
+        assert!(!cfg.labels.contains_key("purple_wolf.middleware"));
+        assert!(!cfg.labels.contains_key("purple_wolf.router"));
+        assert_eq!(cfg.labels.get("tenant").map(String::as_str), Some("acme"));
+        // Two reserved keys dropped → two warnings, deterministically
+        // ordered by BTreeMap iteration.
+        assert_eq!(warnings.len(), 2, "warnings: {warnings:?}");
+        assert!(
+            warnings[0].contains("purple_wolf.middleware"),
+            "{warnings:?}"
+        );
+        assert!(warnings[1].contains("purple_wolf.router"), "{warnings:?}");
+    }
+
+    #[test]
+    fn empty_labels_section_parses_clean() {
+        let json = br#"{"mode":"monitor","labels":{}}"#;
+        let (cfg, warnings) = parse(json).expect("parse");
+        assert!(cfg.labels.is_empty());
+        assert!(warnings.is_empty());
     }
 }
