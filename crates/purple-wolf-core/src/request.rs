@@ -414,7 +414,11 @@ mod tests {
             ip(),
         );
         // Values are bytes (NEW-I2); compare against byte slices.
-        let values: Vec<&[u8]> = v.inspectable_header_values().iter().map(Vec::as_slice).collect();
+        let values: Vec<&[u8]> = v
+            .inspectable_header_values()
+            .iter()
+            .map(Vec::as_slice)
+            .collect();
         assert_eq!(values, vec![b"1.2.3.4".as_slice()]);
     }
 

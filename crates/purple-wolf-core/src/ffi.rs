@@ -73,6 +73,9 @@ mod tests {
         // bytes 0x82 0xC6 are invalid UTF-8 (would lossy to ?? before).
         let mut payload: Vec<u8> = vec![0x82, 0xc6];
         payload.extend_from_slice(b" 1' OR '1'='1");
-        assert!(is_sqli(&payload), "must detect SQLi despite non-UTF-8 prefix");
+        assert!(
+            is_sqli(&payload),
+            "must detect SQLi despite non-UTF-8 prefix"
+        );
     }
 }

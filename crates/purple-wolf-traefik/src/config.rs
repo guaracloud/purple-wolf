@@ -157,17 +157,11 @@ impl From<WireGroups> for core::Groups {
 }
 
 /// camelCase + lenient-int wrapper for `core::XffConfig`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireXff {
     #[serde(default, deserialize_with = "de_lenient_usize")]
     trusted_hops: usize,
-}
-
-impl Default for WireXff {
-    fn default() -> Self {
-        WireXff { trusted_hops: 0 }
-    }
 }
 
 impl From<WireXff> for core::XffConfig {

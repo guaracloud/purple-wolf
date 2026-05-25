@@ -116,19 +116,13 @@ impl Groups {
 /// the wasm guest and the public internet: 0 = ignore XFF entirely
 /// (safe default), 1 = trust the single proxy that fronts you, N = trust
 /// N rightmost entries. See `client_ip` for the full rationale.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct XffConfig {
     /// Number of trusted rightmost XFF hops to peel before reading the
     /// client-asserted IP. Default `0` (do not trust XFF — fall back to
     /// the TCP peer).
     #[serde(default)]
     pub trusted_hops: usize,
-}
-
-impl Default for XffConfig {
-    fn default() -> XffConfig {
-        XffConfig { trusted_hops: 0 }
-    }
 }
 
 /// Reputation-detector tuning. Lives in the top-level config because it
@@ -286,7 +280,9 @@ mod tests {
         // run and verdicts show up in audit logs.
         let g = Groups::all_monitor();
         for slot in [&g.injection, &g.signatures, &g.structural, &g.reputation] {
-            let gc = slot.as_ref().expect("every group must be Some in the fallback");
+            let gc = slot
+                .as_ref()
+                .expect("every group must be Some in the fallback");
             assert!(gc.enabled, "every group must be enabled");
             assert_eq!(gc.mode, GroupMode::Monitor);
         }
