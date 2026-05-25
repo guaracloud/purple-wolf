@@ -87,6 +87,28 @@ pub struct Groups {
     pub reputation: Option<GroupConfig>,
 }
 
+impl Groups {
+    /// Every detector group enabled in `Monitor` mode. Useful as the safe
+    /// fallback when a tenant-supplied config fails to parse: detectors
+    /// still run and emit `would_block_rules`, so an operator can see
+    /// what the WAF *would* have done — instead of every group silently
+    /// off, which the bare `Default::default()` produces.
+    pub fn all_monitor() -> Groups {
+        let g = || {
+            Some(GroupConfig {
+                enabled: true,
+                mode: GroupMode::Monitor,
+            })
+        };
+        Groups {
+            injection: g(),
+            signatures: g(),
+            structural: g(),
+            reputation: g(),
+        }
+    }
+}
+
 /// Reputation-detector tuning. Lives in the top-level config because it
 /// shapes detector construction at process start; per-request behaviour
 /// is governed by the group's mode in `[groups.reputation]`.
@@ -214,6 +236,20 @@ mod tests {
         // Defaults apply
         assert_eq!(cfg.reputation.per_second, 100);
         assert!(cfg.reputation.deny_list.is_empty());
+    }
+
+    #[test]
+    fn groups_all_monitor_enables_every_detector_in_monitor_mode() {
+        // Regression guard for NEW-C1: a malformed Middleware config used to
+        // fall back to `Groups::default()` (every group None → silent no-op).
+        // The fallback now uses `Groups::all_monitor()` so detectors still
+        // run and verdicts show up in audit logs.
+        let g = Groups::all_monitor();
+        for slot in [&g.injection, &g.signatures, &g.structural, &g.reputation] {
+            let gc = slot.as_ref().expect("every group must be Some in the fallback");
+            assert!(gc.enabled, "every group must be enabled");
+            assert_eq!(gc.mode, GroupMode::Monitor);
+        }
     }
 
     #[test]

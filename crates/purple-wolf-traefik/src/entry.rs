@@ -40,11 +40,14 @@ fn state<R>(f: impl FnOnce(&Config, &Engine) -> R) -> R {
     STATE.with(|s| {
         let (cfg, engine_) = s.get_or_init(|| {
             let cfg = adapter::parse(&host::config()).unwrap_or_else(|e| {
-                host::log(&format!("purple-wolf: invalid config: {e}"));
-                // Fall back to a permissive monitor config so the plugin
-                // doesn't bring down every route on a bad config. We
-                // construct this directly rather than deserializing because
-                // `Config` has required fields with no serde defaults.
+                host::log(&format!(
+                    "purple-wolf: invalid Middleware config ({e}); falling back to global monitor mode — every detector enabled in monitor; verdicts will appear in audit logs but the WAF will not block. Reload Traefik with a valid config to enable enforcement."
+                ));
+                // Build a deliberately-noisy fallback: every group runs in
+                // monitor, so the operator can see verdicts in audit logs and
+                // diagnose. Previously this constructed `groups: Default()`
+                // which silently disabled every detector — making a bad
+                // config a silent no-op WAF.
                 Config {
                     mode: Mode::Monitor,
                     fail_mode: FailMode::FailOpen,
@@ -52,7 +55,7 @@ fn state<R>(f: impl FnOnce(&Config, &Engine) -> R) -> R {
                         max_inspect_bytes: 1_048_576,
                         over_cap: OverCap::Pass,
                     },
-                    groups: Default::default(),
+                    groups: purple_wolf_core::config::Groups::all_monitor(),
                     reputation: ReputationConfig::default(),
                 }
             });
