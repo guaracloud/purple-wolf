@@ -18,7 +18,7 @@ impl Detector for InjectionDetector {
                     group: Group::Injection,
                     rule: "sqli",
                     severity: Severity::Critical,
-                    detail: format!("SQLi in field: {}", truncate(field)),
+                    detail: format!("SQLi in field: {}", truncate_bytes(field)),
                 });
             }
             if ffi::is_xss(field) {
@@ -26,7 +26,7 @@ impl Detector for InjectionDetector {
                     group: Group::Injection,
                     rule: "xss",
                     severity: Severity::High,
-                    detail: format!("XSS in field: {}", truncate(field)),
+                    detail: format!("XSS in field: {}", truncate_bytes(field)),
                 });
             }
         }
@@ -34,19 +34,21 @@ impl Detector for InjectionDetector {
     }
 }
 
-/// Build a short, log-safe representation of an attacker-controlled string
-/// for the audit-log `blocked_detail` field.
+/// Build a short, log-safe representation of an attacker-controlled byte
+/// slice for the audit-log `blocked_detail` field.
 ///
+/// - Lossy-converts bytes to a string first (the audit log is JSON-text,
+///   so we can't carry raw bytes through). Non-UTF-8 bytes become
+///   U+FFFD in this preview — but the detector already ran against the
+///   raw bytes (NEW-I2), so an attack hidden in non-UTF-8 still fires;
+///   we just lose a few characters of the audit-detail preview.
 /// - Truncates to 80 chars to keep log lines bounded.
 /// - Replaces ASCII control characters (`\x00..=\x1F`, `\x7f`) with `.` so
 ///   a payload containing `\r\n` cannot force a downstream regex-based log
-///   parser to read across what it thinks is a line boundary. (`serde_json`
-///   escapes these inside the JSON string value, so the JSON line itself
-///   is intact — but Promtail / Loki / Vector regex pipelines commonly
-///   match against the unescaped substring, see NEW-I1 in the followup
-///   review.) Non-ASCII printable characters are preserved.
-fn truncate(s: &str) -> String {
-    s.chars()
+///   parser to read across what it thinks is a line boundary (NEW-I1).
+fn truncate_bytes(s: &[u8]) -> String {
+    String::from_utf8_lossy(s)
+        .chars()
         .take(80)
         .map(|c| {
             if (c as u32) < 0x20 || c == '\x7f' {
@@ -149,8 +151,8 @@ mod tests {
     /// pipelines could be fooled into reading "allow" as the audit action.
     #[test]
     fn truncate_replaces_control_chars() {
-        let dangerous = "1' OR '1'='1\r\n{\"action\":\"allow\"}\x00\x07";
-        let safe = super::truncate(dangerous);
+        let dangerous = b"1' OR '1'='1\r\n{\"action\":\"allow\"}\x00\x07";
+        let safe = super::truncate_bytes(dangerous);
         assert!(!safe.contains('\r'), "CR must be stripped: {safe:?}");
         assert!(!safe.contains('\n'), "LF must be stripped: {safe:?}");
         assert!(!safe.contains('\x00'), "NUL must be stripped: {safe:?}");

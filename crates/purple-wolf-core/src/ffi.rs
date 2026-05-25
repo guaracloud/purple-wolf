@@ -12,7 +12,14 @@ extern "C" {
 }
 
 /// Safe wrapper: is `s` SQL injection?
-pub fn is_sqli(s: &str) -> bool {
+///
+/// Takes raw bytes (not `&str`) so non-UTF-8 payloads — e.g. a SQLi
+/// crafted in SHIFT-JIS or any high-bit encoding — reach libinjection
+/// in their original byte sequence. libinjection's C API is
+/// byte-oriented; the previous `&str` signature forced a lossy
+/// conversion at every call site that masked attacks (NEW-I2 in the
+/// followup review).
+pub fn is_sqli(s: &[u8]) -> bool {
     // `c_char` is `i8` on most targets but `u8` on aarch64 Linux; using
     // `0 as c_char` keeps the buffer element type matching the FFI parameter.
     let mut fp = [0 as c_char; 16];
@@ -25,7 +32,9 @@ pub fn is_sqli(s: &str) -> bool {
 }
 
 /// Safe wrapper: is `s` cross-site scripting?
-pub fn is_xss(s: &str) -> bool {
+///
+/// Takes raw bytes for the same reason as [`is_sqli`].
+pub fn is_xss(s: &[u8]) -> bool {
     // SAFETY: pointer + length describe `s`.
     let r = unsafe { libinjection_xss(s.as_ptr() as *const c_char, s.len()) };
     // As in `is_sqli`: a `-1` error return is intentionally treated as
@@ -39,18 +48,31 @@ mod tests {
 
     #[test]
     fn detects_sqli() {
-        assert!(is_sqli("1' OR '1'='1"));
-        assert!(is_sqli("'; DROP TABLE users; --"));
+        assert!(is_sqli(b"1' OR '1'='1"));
+        assert!(is_sqli(b"'; DROP TABLE users; --"));
     }
 
     #[test]
     fn detects_xss() {
-        assert!(is_xss("<script>alert(1)</script>"));
+        assert!(is_xss(b"<script>alert(1)</script>"));
     }
 
     #[test]
     fn passes_benign_input() {
-        assert!(!is_sqli("hello world"));
-        assert!(!is_xss("hello world"));
+        assert!(!is_sqli(b"hello world"));
+        assert!(!is_xss(b"hello world"));
+    }
+
+    /// Regression guard for NEW-I2: a non-UTF-8 SQLi payload must still
+    /// trigger libinjection. Pre-fix the byte sequence was lossied to
+    /// `String` before reaching this wrapper, replacing the high-bit
+    /// SHIFT-JIS bytes with U+FFFD and masking the attack.
+    #[test]
+    fn detects_sqli_in_non_utf8_bytes() {
+        // SHIFT-JIS for 'と' followed by a literal SQLi tail; the high
+        // bytes 0x82 0xC6 are invalid UTF-8 (would lossy to ?? before).
+        let mut payload: Vec<u8> = vec![0x82, 0xc6];
+        payload.extend_from_slice(b" 1' OR '1'='1");
+        assert!(is_sqli(&payload), "must detect SQLi despite non-UTF-8 prefix");
     }
 }

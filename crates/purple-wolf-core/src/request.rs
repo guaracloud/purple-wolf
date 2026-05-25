@@ -41,8 +41,15 @@ pub struct Request {
     pub headers: Vec<(String, String)>,
     /// Total byte size of all header names and values combined.
     pub header_bytes: usize,
-    /// Lossy UTF-8 of the body, for text-based detectors.
-    pub body_text: String,
+    /// Raw request body, as the host delivered it. Stored as bytes so
+    /// non-UTF-8 payloads (e.g. SHIFT-JIS or any high-bit encoding) reach
+    /// libinjection in their original form — pre-fix the field was a
+    /// lossy `String`, and any invalid UTF-8 sequence became U+FFFD
+    /// before detection ran. Detectors should use this through
+    /// [`Request::inspectable_fields`] (which returns `&[u8]`) so the
+    /// raw bytes are preserved end-to-end. Audit serialization gets a
+    /// lossy view via [`Request::body_text_lossy`].
+    body: Vec<u8>,
     /// Whether the body was read and is available for inspection.
     pub body_inspected: bool,
     /// Source IP address, resolved from proxy headers or direct peer.
@@ -51,8 +58,9 @@ pub struct Request {
     /// appears both raw and (if different) percent-decoded so encoded
     /// payloads are inspected in both forms. Used by detectors via
     /// [`Request::inspectable_fields`]; computed once at `build` time so
-    /// the per-detector hot path stays a borrow.
-    inspectable_headers: Vec<String>,
+    /// the per-detector hot path stays a borrow. Stored as `Vec<u8>`
+    /// so detectors see header values as raw bytes (NEW-I2).
+    inspectable_headers: Vec<Vec<u8>>,
 }
 
 impl Request {
@@ -72,7 +80,6 @@ impl Request {
     ) -> Request {
         let query_params = parse_query(raw_query);
         let header_bytes: usize = headers.iter().map(|(k, v)| k.len() + v.len()).sum();
-        let body_text = String::from_utf8_lossy(&body).into_owned();
         let headers: Vec<(String, String)> = headers
             .into_iter()
             .map(|(k, v)| (k.to_ascii_lowercase(), v))
@@ -91,11 +98,25 @@ impl Request {
             query_params,
             headers,
             header_bytes,
-            body_text,
+            body,
             body_inspected,
             source_ip,
             inspectable_headers,
         }
+    }
+
+    /// Raw request body bytes, as the host delivered them. Detectors
+    /// prefer this over [`Request::body_text_lossy`] so non-UTF-8 payloads
+    /// reach libinjection intact.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// Lossy UTF-8 preview of the body for audit-log serialization or
+    /// debug output. Detectors should use [`Request::body_bytes`] (or
+    /// [`Request::inspectable_fields`], which returns bytes).
+    pub fn body_text_lossy(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.body)
     }
 
     /// The original raw query string (verbatim, undecoded), if any.
@@ -103,21 +124,28 @@ impl Request {
         self.raw_query.as_deref()
     }
 
-    /// Every string a detector should scan: path, param values, body text,
-    /// and the value of every inspectable header (see
-    /// [`INSPECTABLE_HEADERS_EXACT`]).
+    /// Every field a detector should scan, as **raw bytes**: the
+    /// percent-decoded path, every decoded query-param value, the body
+    /// (when `body_inspected`), and the value of every inspectable header
+    /// (raw + percent-decoded forms; see [`INSPECTABLE_HEADERS_EXACT`]).
     ///
-    /// Headers are appended last so the test/detector ordering stays stable
+    /// Returning bytes (not `&str`) is deliberate — libinjection is byte-
+    /// oriented and aho-corasick matches bytes natively. The lossy UTF-8
+    /// conversion that used to happen on the body is gone, so a SQLi
+    /// crafted in SHIFT-JIS or any non-UTF-8 encoding reaches the
+    /// detector in its original bytes (NEW-I2 in the followup review).
+    ///
+    /// Headers are appended last so test/detector ordering stays stable
     /// for path/query/body assertions.
-    pub fn inspectable_fields(&self) -> Vec<&str> {
-        let mut out = vec![self.path.as_str()];
+    pub fn inspectable_fields(&self) -> Vec<&[u8]> {
+        let mut out: Vec<&[u8]> = vec![self.path.as_bytes()];
         for (_, v) in &self.query_params {
-            out.push(v.as_str());
+            out.push(v.as_bytes());
         }
         if self.body_inspected {
-            out.push(self.body_text.as_str());
+            out.push(self.body.as_slice());
         }
-        out.extend(self.inspectable_headers.iter().map(String::as_str));
+        out.extend(self.inspectable_headers.iter().map(Vec::as_slice));
         out
     }
 
@@ -126,7 +154,7 @@ impl Request {
     /// Detectors typically read these via [`Request::inspectable_fields`];
     /// this accessor exists for callers that need to distinguish header
     /// values from URL/body inputs (e.g. for severity or detail formatting).
-    pub fn inspectable_header_values(&self) -> &[String] {
+    pub fn inspectable_header_values(&self) -> &[Vec<u8>] {
         &self.inspectable_headers
     }
 
@@ -146,24 +174,23 @@ fn decode(s: &str) -> String {
 }
 
 /// Pre-compute the values of allow-listed headers in both raw and
-/// percent-decoded form. The result is stored on `Request` and reused by
-/// every detector via [`Request::inspectable_fields`].
+/// percent-decoded form, as bytes (NEW-I2).
 ///
 /// The decoded form closes a percent-encoded bypass of the header
 /// inspection added in v0.2 C-1: without it, a payload like
 /// `Cookie: id=%27%20OR%20%271%27%3D%271` would reach libinjection as
 /// the literal `%27...` string and never match (NEW-I4 in the followup
-/// review). Storing both forms lets the detector hot path stay a borrow.
-fn build_inspectable_headers(headers: &[(String, String)]) -> Vec<String> {
-    let mut out = Vec::new();
+/// review).
+fn build_inspectable_headers(headers: &[(String, String)]) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = Vec::new();
     for (k, v) in headers {
         if INSPECTABLE_HEADERS_EXACT.contains(&k.as_str())
             || k.starts_with(INSPECTABLE_HEADER_PREFIX)
         {
-            out.push(v.clone());
+            out.push(v.as_bytes().to_vec());
             let decoded = decode(v);
             if decoded != *v {
-                out.push(decoded);
+                out.push(decoded.into_bytes());
             }
         }
     }
@@ -292,7 +319,7 @@ mod tests {
             false,
             ip(),
         );
-        assert!(!v.inspectable_fields().contains(&"payload"));
+        assert!(!v.inspectable_fields().contains(&b"payload".as_slice()));
         let v2 = Request::build(
             "POST",
             "h",
@@ -303,7 +330,7 @@ mod tests {
             true,
             ip(),
         );
-        assert!(v2.inspectable_fields().contains(&"payload"));
+        assert!(v2.inspectable_fields().contains(&b"payload".as_slice()));
     }
 
     #[test]
@@ -363,13 +390,13 @@ mod tests {
             ip(),
         );
         let fields = v.inspectable_fields();
-        assert!(fields.contains(&"sess=abc; id=42"));
-        assert!(fields.contains(&"https://x.example/from"));
-        assert!(fields.contains(&"Bearer tok"));
-        assert!(fields.contains(&"victor"));
-        assert!(fields.contains(&"Mozilla/5.0"));
-        assert!(!fields.contains(&"en-US"));
-        assert!(!fields.contains(&"no-cache"));
+        assert!(fields.contains(&b"sess=abc; id=42".as_slice()));
+        assert!(fields.contains(&b"https://x.example/from".as_slice()));
+        assert!(fields.contains(&b"Bearer tok".as_slice()));
+        assert!(fields.contains(&b"victor".as_slice()));
+        assert!(fields.contains(&b"Mozilla/5.0".as_slice()));
+        assert!(!fields.contains(&b"en-US".as_slice()));
+        assert!(!fields.contains(&b"no-cache".as_slice()));
     }
 
     #[test]
@@ -386,7 +413,9 @@ mod tests {
             false,
             ip(),
         );
-        assert_eq!(v.inspectable_header_values(), vec!["1.2.3.4"]);
+        // Values are bytes (NEW-I2); compare against byte slices.
+        let values: Vec<&[u8]> = v.inspectable_header_values().iter().map(Vec::as_slice).collect();
+        assert_eq!(values, vec![b"1.2.3.4".as_slice()]);
     }
 
     #[test]
@@ -402,7 +431,15 @@ mod tests {
             true,
             ip(),
         );
-        assert_eq!(v.inspectable_fields(), vec!["/path", "qv", "body", "ck"]);
+        assert_eq!(
+            v.inspectable_fields(),
+            vec![
+                b"/path".as_slice(),
+                b"qv".as_slice(),
+                b"body".as_slice(),
+                b"ck".as_slice(),
+            ]
+        );
     }
 
     // ── client_ip tests (trust model — NEW-H3) ──────────────────────────────
