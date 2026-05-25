@@ -82,7 +82,9 @@ fn de_lenient_u32<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
 
 // ---------- wire types (mirror core, with camelCase + lenient primitives) ----------
 
-/// camelCase wrapper for `core::FailMode`.
+/// camelCase wrapper for `core::FailMode`. Enum variants have no fields so
+/// `deny_unknown_fields` doesn't apply here — serde rejects unknown variant
+/// strings by default.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum WireFailMode {
@@ -101,7 +103,7 @@ impl From<WireFailMode> for core::FailMode {
 
 /// camelCase + lenient-bool wrapper for `core::GroupConfig`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireGroupConfig {
     #[serde(default = "default_true", deserialize_with = "de_lenient_bool")]
     enabled: bool,
@@ -127,7 +129,7 @@ impl From<WireGroupConfig> for core::GroupConfig {
 
 /// camelCase wrapper for `core::Groups`.
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireGroups {
     #[serde(default)]
     injection: Option<WireGroupConfig>,
@@ -152,7 +154,7 @@ impl From<WireGroups> for core::Groups {
 
 /// camelCase + lenient-int wrapper for `core::ReputationConfig`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireReputation {
     #[serde(default = "default_per_second", deserialize_with = "de_lenient_u32")]
     per_second: u32,
@@ -184,7 +186,7 @@ impl From<WireReputation> for core::ReputationConfig {
 
 /// camelCase + lenient-int wrapper for `core::BodyConfig`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireBody {
     #[serde(
         default = "default_max_inspect_bytes",
@@ -213,7 +215,7 @@ impl Default for WireBody {
 
 /// Top-level wire shape Traefik delivers.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Wire {
     mode: core::Mode,
     #[serde(default = "default_fail_mode")]
@@ -342,6 +344,47 @@ mod tests {
         let cfg = parse(json).expect("parse");
         let str_ = cfg.groups.structural.as_ref().expect("structural present");
         assert!(!str_.enabled);
+    }
+
+    /// Tenant config typos must surface at parse time. Pre-I-2 the adapter
+    /// silently ignored unknown fields, so a Middleware written as
+    /// `groupz:` (instead of `groups:`) would parse fine and the WAF would
+    /// run with built-in defaults — a tenant footgun. After the fix the
+    /// adapter rejects unknown fields at every nesting level.
+    #[test]
+    fn rejects_unknown_top_level_field() {
+        let json = br#"{ "mode": "monitor", "groupz": { } }"#;
+        let err = parse(json).expect_err("unknown top-level field must error");
+        assert!(
+            err.contains("groupz"),
+            "error should mention the bad key: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_groups() {
+        let json = br#"{
+          "mode": "monitor",
+          "groups": { "injction": { "enabled": true } }
+        }"#;
+        let err = parse(json).expect_err("unknown nested field must error");
+        assert!(
+            err.contains("injction"),
+            "error should mention the bad key: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_group_config() {
+        let json = br#"{
+          "mode": "monitor",
+          "groups": { "injection": { "enabld": true } }
+        }"#;
+        let err = parse(json).expect_err("unknown field inside group must error");
+        assert!(
+            err.contains("enabld"),
+            "error should mention the bad key: {err}"
+        );
     }
 
     /// Traefik serializes YAML booleans/integers to JSON STRINGS when
