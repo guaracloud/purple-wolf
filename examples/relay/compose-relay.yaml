@@ -1,0 +1,20 @@
+# Relay config used by docker-compose.full.yml.
+# Reads from stdin (the compose file pipes Traefik's stdout into the
+# relay's stdin via depends-on log routing in production setups; the
+# simplest demo path is for the operator to manually `docker compose
+# logs -f traefik | docker compose exec -T relay tee /dev/stdin`).
+sources:
+  - type: stdin
+
+subscribers:
+  - id: demo
+    url: http://subscriber:8090/webhook
+    secret_env: DEMO_SECRET
+    timeout_ms: 5000
+    retry:
+      max_attempts: 3
+      base_delay_ms: 100
+      max_delay_ms: 1000
+
+relay:
+  instance_id: relay-demo

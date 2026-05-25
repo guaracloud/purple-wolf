@@ -206,10 +206,81 @@ preserves the rest, so no detection is lost.
 - `source_ip` cardinality from the audit log — sudden growth into the
   cap (50k entries by default) indicates IP-rotation DoS attempts.
 - `body.overCap` 403s — see §4.2.
+- `pwrelay_deliveries_total{outcome="dlq"}` — see §7.
+- `pwrelay_deliveries_total{outcome="dropped_queue_full"}` — sustained
+  growth means a subscriber is consistently slower than event arrival
+  rate; raise that subscriber's `subscriber_queue` or reduce its
+  filter scope.
 
 ---
 
-## 6. Reporting issues
+## 7. Webhook delivery (v0.3+ purple-wolf-relay)
+
+The relay is a *separate* process that sits outside the WAF's trust
+boundary. It tails Traefik's stdout, parses the purple-wolf audit JSON,
+and delivers HMAC-signed HTTP POSTs to operator-configured subscribers.
+The protocol contract lives in [`docs/webhook-protocol.md`](docs/webhook-protocol.md).
+
+### 7.1 Trust model
+
+- The relay has **no inbound trust** from subscribers — it only sends.
+  Subscribers expose an HTTP endpoint; the relay never accepts
+  webhooks back. The admin surface (`/metrics`, `/healthz`, `/readyz`,
+  `/version`) is intended for cluster-internal scrape only and has
+  no authentication in v0.3 — bind to an internal network or front
+  with an authenticated reverse proxy.
+- Each subscriber is identified by a shared HMAC secret. The relay
+  references secrets via `secret_env` or `secret_file` — they must
+  not be inlined in YAML. Secrets are held in
+  `zeroize::Zeroizing<Vec<u8>>` and wiped on drop.
+- The relay is **best-effort, at-least-once.** Subscribers MUST
+  dedupe on `event_id` (stable across retries) and verify the HMAC
+  before processing. The reference subscribers in
+  `crates/purple-wolf-relay/examples/subscribers/` (Python / Go /
+  TypeScript) implement both.
+
+### 7.2 Failure modes and operator action
+
+- **Subscriber endpoint down.** Events flow into the per-subscriber
+  bounded mpsc; the sink retries with exponential backoff. After
+  `retry.max_attempts` the envelope lands in the in-memory DLQ
+  (bounded; oldest dropped on overflow). Watch the `pwrelay_dlq_depth`
+  gauge and the `pwrelay_deliveries_total{outcome="dlq"}` counter.
+- **Subscriber endpoint returns 4xx (non-408/429).** Treated as a
+  permanent client-side problem (bad URL, expired secret, invalid
+  schema) → envelope to DLQ, no retry. Fix the subscriber config and
+  use the planned `POST /dlq/<id>/replay` admin endpoint (v0.4).
+- **Slow subscriber backpressures fast ones.** Cannot happen: the
+  fan-out uses `try_send`, so a full per-subscriber queue drops the
+  event for THAT subscriber and increments
+  `pwrelay_deliveries_total{outcome="dropped_queue_full"}`.
+
+### 7.3 Secret rotation
+
+1. Generate the new secret out-of-band (`openssl rand -hex 32`).
+2. Deploy the new secret to the subscriber side first; subscribers
+   should accept either old or new (overlap window).
+3. Update the relay's `secret_env` / `secret_file` to the new value
+   and restart the relay (or HUP if/when v0.4 wires reload).
+4. After confirming no failed verifications on the subscriber, retire
+   the old secret.
+
+### 7.4 What the relay does NOT do
+
+- **No durable DLQ.** The bounded in-memory DLQ is lost on restart;
+  SQLite-backed DLQ is a v0.4 concern.
+- **No clustering / shared state across instances.** Each relay
+  instance bookmarks the log tail independently; running two relays
+  against the same log file is supported (with subscriber-side dedup
+  on `event_id`) but they don't coordinate DLQs.
+- **No replay of audit-log history.** A relay restart resumes from
+  the bookmark; events emitted between the WAF's audit-line and the
+  bookmark write window may not be re-emitted if the relay crashes
+  before a checkpoint.
+
+---
+
+## 8. Reporting issues
 
 See [SECURITY.md](SECURITY.md) for the private disclosure channel.
 This document is updated on every change to detection scope or trust

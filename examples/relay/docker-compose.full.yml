@@ -1,0 +1,63 @@
+# End-to-end purple-wolf v0.3 simulation.
+#
+# Brings up:
+#   - upstream         — a stub HTTP server (the "real" backend)
+#   - traefik          — Traefik v3 with the purple-wolf WAF mounted
+#                        as a local-plugin .wasm
+#   - relay            — purple-wolf-relay tailing Traefik's stdout
+#   - subscriber       — a tiny Python Flask webhook subscriber that
+#                        verifies the HMAC, dedupes on event_id, and
+#                        prints each delivery
+#
+# Usage:
+#   docker compose -f examples/relay/docker-compose.full.yml up
+#
+# Then drive an attack:
+#   curl 'http://127.0.0.1:8080/e/?id=1%27%20OR%20%271%27%3D%271'
+#
+# You should see a 403 from Traefik and a printed webhook delivery
+# from the subscriber container.
+
+services:
+  upstream:
+    image: python:3-alpine
+    command: ["python", "-m", "http.server", "8000"]
+
+  traefik:
+    image: traefik:v3
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../../tests/relay_integration/traefik:/etc/traefik:ro
+      - ../../tests/relay_integration/plugin/.traefik.yml:/plugins-local/src/github.com/guaracloud/purple-wolf/.traefik.yml:ro
+      - ../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm:/plugins-local/src/github.com/guaracloud/purple-wolf/plugin.wasm:ro
+    depends_on:
+      - upstream
+
+  subscriber:
+    image: python:3-alpine
+    working_dir: /app
+    volumes:
+      - ../../tests/relay_integration/subscriber:/app:ro
+    command: ["sh", "-c", "pip install --quiet flask && python /app/subscriber.py"]
+    environment:
+      - PURPLEWOLF_SECRET=demo-secret
+      - RECORD_PATH=/dev/stdout
+
+  relay:
+    image: ghcr.io/guaracloud/purple-wolf-relay:0.3.0
+    command:
+      - --config=/etc/purple-wolf-relay/relay.yaml
+      - --admin-addr=0.0.0.0:9090
+    environment:
+      - DEMO_SECRET=demo-secret
+      - RUST_LOG=info
+    volumes:
+      - ./compose-relay.yaml:/etc/purple-wolf-relay/relay.yaml:ro
+    depends_on:
+      - subscriber
+      - traefik
+    ports:
+      - "9090:9090"
