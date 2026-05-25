@@ -2,7 +2,7 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.2 in development. [Design spec](docs/superpowers/specs/2026-05-24-purple-wolf-v0.2-design.md).
+**Status:** v0.2 in development. See [THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed to catch, and [docs/configuration.md](docs/configuration.md) for the Middleware config reference.
 
 ## What it does
 
