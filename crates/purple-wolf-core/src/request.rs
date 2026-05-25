@@ -4,7 +4,7 @@ use std::net::IpAddr;
 
 /// Headers whose values are inspected by the detection pipeline.
 ///
-/// Two rules: (a) exact match against [`INSPECTABLE_HEADERS_EXACT`] (after
+/// Two rules: (a) exact match against `INSPECTABLE_HEADERS_EXACT` (after
 /// case-fold to lowercase, which `Request::build` already applies), or (b)
 /// any header whose name starts with `x-` (the conventional prefix for
 /// custom application headers, a frequent injection vector).
@@ -127,7 +127,7 @@ impl Request {
     /// Every field a detector should scan, as **raw bytes**: the
     /// percent-decoded path, every decoded query-param value, the body
     /// (when `body_inspected`), and the value of every inspectable header
-    /// (raw + percent-decoded forms; see [`INSPECTABLE_HEADERS_EXACT`]).
+    /// (raw + percent-decoded forms; see `INSPECTABLE_HEADERS_EXACT`).
     ///
     /// Returning bytes (not `&str`) is deliberate — libinjection is byte-
     /// oriented and aho-corasick matches bytes natively. The lossy UTF-8

@@ -83,32 +83,32 @@ proptest! {
     }
 
     /// I-7 + NEW-M2 guard: `client_ip` must return the leftmost-parseable
-    /// XFF entry after peeling `trust_hops` trusted entries (when the
-    /// peeled prefix contains at least one parseable IP). This was
+    /// XFF entry after peeling `trust_hops` trusted entries. This was
     /// previously `prop_assert!(true)` — a literal no-op.
+    ///
+    /// We synthesize IPv4 addresses from four `u8`s instead of regex-
+    /// generating strings; that keeps every input parseable (the
+    /// previous version generated up to "999.999.999.999" and burned
+    /// proptest's reject budget on CI).
     #[test]
     fn client_ip_returns_leftmost_parseable_after_peel(
-        client_ip_str in "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}",
-        trusted_chain in proptest::collection::vec(
-            "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}",
-            1..4
-        ),
+        client_octets in any::<(u8, u8, u8, u8)>(),
+        trusted_chain in proptest::collection::vec(any::<(u8, u8, u8, u8)>(), 1..4),
     ) {
-        // Only run the property when the synthesized client IP is parseable;
-        // when it's not (e.g. "999.0.0.0"), the function falls through to
-        // peer, which is a separately-covered invariant.
-        let parsed_client: Result<IpAddr, _> = client_ip_str.parse();
-        prop_assume!(parsed_client.is_ok());
+        let fmt = |(a, b, c, d): (u8, u8, u8, u8)| format!("{a}.{b}.{c}.{d}");
+        let client_ip_str = fmt(client_octets);
+        let parsed_client: IpAddr = client_ip_str.parse().expect("octets always parse");
         let hops = trusted_chain.len();
         // Chain: client, trusted_1, ..., trusted_n
-        let xff = std::iter::once(client_ip_str.as_str())
-            .chain(trusted_chain.iter().map(|s| s.as_str()))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let mut chain_strs: Vec<String> = vec![client_ip_str.clone()];
+        for t in &trusted_chain {
+            chain_strs.push(fmt(*t));
+        }
+        let xff = chain_strs.join(", ");
         let headers = vec![("x-forwarded-for".to_string(), xff)];
         let peer = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let result = client_ip(&headers, peer, hops);
-        prop_assert_eq!(result, parsed_client.unwrap());
+        prop_assert_eq!(result, parsed_client);
     }
 
     /// Total: `client_ip` never panics across the entire {trust_hops × XFF ×
