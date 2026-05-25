@@ -172,7 +172,7 @@ fn inspect() -> Action {
         let decision = policy::decide(verdicts, cfg.mode, |g| group_mode(cfg, g));
 
         // Audit log if anything to say.
-        let entry = AuditEntry::from(&req, &decision);
+        let entry = AuditEntry::from_with_labels(&req, &decision, &cfg.labels);
         if entry.is_noteworthy() {
             host::log(&audit::to_log_line(&entry));
         }
