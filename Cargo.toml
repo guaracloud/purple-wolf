@@ -4,7 +4,7 @@ members = ["crates/purple-wolf-core", "crates/purple-wolf-traefik"]
 exclude = ["fuzz", "tests/traefik_integration"]
 
 [workspace.package]
-version = "0.2.0-dev"
+version = "0.3.0-dev"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"

@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-core"
-version = "0.2.0-dev"
+version = "0.3.0-dev"
 dependencies = [
  "aho-corasick",
  "cc",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-traefik"
-version = "0.2.0-dev"
+version = "0.3.0-dev"
 dependencies = [
  "purple-wolf-core",
  "serde",
