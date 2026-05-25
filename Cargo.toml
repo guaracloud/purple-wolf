@@ -1,7 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/purple-wolf-core", "crates/purple-wolf-traefik"]
-exclude = ["fuzz", "tests/traefik_integration"]
+members = [
+    "crates/purple-wolf-core",
+    "crates/purple-wolf-relay",
+    "crates/purple-wolf-traefik",
+]
+exclude = ["fuzz", "tests/relay_integration", "tests/traefik_integration"]
 
 [workspace.package]
 version = "0.3.0-dev"
