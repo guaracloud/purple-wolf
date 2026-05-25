@@ -1,0 +1,97 @@
+# Full purple-wolf-relay config example.
+#
+# Every option is shown with its default value or a representative
+# non-default. Use this as a starting point and remove anything you
+# don't need — defaults are explicit so you can see what would change.
+
+# ──────────────────────────────────────────────────────────────────────
+# sources: where audit lines come from
+# ──────────────────────────────────────────────────────────────────────
+sources:
+  # Tail Traefik's access log on disk. Survives rotation; persists a
+  # byte-offset bookmark next to the file so restarts don't re-emit or
+  # skip events.
+  - type: log_tail
+    path: /var/log/traefik/access.log
+    # If true, read from offset 0 on first start (useful for replaying
+    # a saved log). Otherwise seek to end on first start; bookmark
+    # behavior across restarts is independent of this.
+    from_beginning: false
+
+  # Read line-buffered from stdin. Useful for piping `docker compose
+  # logs -f` directly into the relay during development.
+  # - type: stdin
+
+# ──────────────────────────────────────────────────────────────────────
+# enrichments: optional label augmentation per envelope
+# ──────────────────────────────────────────────────────────────────────
+enrichments:
+  # Static lookup: when an envelope's labels[tenant] == "acme",
+  # merge {owner: payments-team, oncall: pager-payments} into labels.
+  # New keys only — never overwrites operator-set labels.
+  - type: lookup
+    on_label: tenant
+    table:
+      acme:
+        owner: payments-team
+        oncall: pager-payments
+      contoso:
+        owner: identity-team
+        oncall: pager-identity
+
+  # HTTP enricher: GET <url> (with `{value}` substituted for the
+  # label value), parse the JSON body as a {key: string} map, merge
+  # into labels. Per-call timeout; LRU+TTL cache bounds upstream load.
+  # - type: http
+  #   on_label: tenant
+  #   url: https://catalog.internal/tenants/{value}/labels
+  #   timeout_ms: 500
+  #   cache_ttl_s: 300
+
+# ──────────────────────────────────────────────────────────────────────
+# subscribers: where signed webhooks go
+# ──────────────────────────────────────────────────────────────────────
+subscribers:
+  - id: siem-prod
+    url: https://siem.example.com/ingest/purple-wolf
+    # HMAC secret. Exactly one of secret_env / secret_file. Never inline
+    # the secret in this YAML.
+    secret_env: SIEM_HMAC_SECRET
+    # Per-delivery HTTP timeout (subscriber must ack within this).
+    timeout_ms: 30000
+    # Only events matching all filter clauses are sent. Empty filter =
+    # match everything.
+    filter:
+      labels:
+        environment: prod
+      severity_min: high
+      # Glob match. `*` is the only wildcard. Matched against
+      # event.blocked_rule; for allow-mode events, matched against any
+      # entry in event.would_block_rules.
+      blocked_rule_pattern: "injection/*"
+    retry:
+      # 1..=max_attempts retries; envelope to DLQ after exhaustion.
+      max_attempts: 8
+      # Exponential backoff with ±20% jitter.
+      base_delay_ms: 500
+      max_delay_ms: 600000  # 10 minutes
+    enabled: true
+
+  - id: slack-onfire
+    url: https://hooks.slack.com/services/T000/B000/XXXXXXXXXX
+    secret_file: /etc/purple-wolf/slack.secret
+    filter:
+      severity_min: critical
+    enabled: true
+
+# ──────────────────────────────────────────────────────────────────────
+# relay: process-wide knobs (mostly defaultable)
+# ──────────────────────────────────────────────────────────────────────
+relay:
+  # Identifier for THIS relay instance; defaults to the OS hostname.
+  # Appears in envelope.source.relay_instance — useful for cluster-wide
+  # dedup when running >1 relay against the same log stream.
+  instance_id: relay-prod-1
+  # Bounded mpsc per subscriber. A full queue drops events for THAT
+  # subscriber (counted in metrics) but never backpressures the fan-out.
+  subscriber_queue: 10000

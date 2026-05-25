@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — v0.3 audit labels + webhook relay
+
+- **`Config.labels: BTreeMap<String, String>`** on every Middleware. Free-form
+  `key=value` metadata that the WAF echoes verbatim into every audit-log line
+  for that Middleware. Keys match `^[a-z][a-z0-9_.-]{0,62}$`, ≤32 keys,
+  ≤4 KiB total (BTreeMap → deterministic alphabetical JSON). The
+  reserved-prefix `purple_wolf.*` is dropped at the adapter with a
+  one-warning-per-key log so a tenant who copied an example can't shadow
+  WAF-set fields. Value scrubbing strips ASCII control chars at audit-emit
+  time (same log-injection guard as `blocked_detail`). See
+  [`docs/configuration.md` § Labels](docs/configuration.md#labels).
+- **`purple-wolf-relay` (new crate, `0.3.0`)** — standalone, vendor-neutral
+  webhook fan-out for purple-wolf audit events. Tails Traefik's stdout (or
+  stdin), parses the audit JSON, optionally enriches labels, evaluates
+  per-subscriber filters (label subset / severity floor / glob rule
+  pattern), and delivers HMAC-SHA256-signed POSTs with exponential backoff
+  retries + bounded DLQ. Per-subscriber bounded mpsc isolates slow
+  subscribers from fast ones; on-disk bookmark resume across restarts.
+  Distroless multi-arch Docker image at
+  `ghcr.io/guaracloud/purple-wolf-relay`. Prometheus `/metrics`,
+  `/healthz`, `/readyz`, `/version`.
+- **`docs/webhook-protocol.md`** — stable `purple-wolf.audit/v1` envelope
+  spec (HMAC scheme, idempotency, retry semantics, versioning policy,
+  reference subscriber implementations in Python / Go / TypeScript).
+- **`relay-integration` CI job** runs a full-stack docker-compose
+  (Traefik + WAF + relay + mock subscriber) and asserts a SQLi attack
+  produces a verified HMAC-signed envelope at the subscriber with
+  the operator's labels intact.
+
 ### Added — detection scope
 
 - **Inspect allow-listed request headers** (Cookie, Referer, Host,

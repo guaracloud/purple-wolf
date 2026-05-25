@@ -1,0 +1,138 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: purple-wolf
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: purple-wolf-relay
+  namespace: purple-wolf
+  labels:
+    app.kubernetes.io/name: purple-wolf-relay
+    app.kubernetes.io/component: webhook-relay
+spec:
+  # v0.3 is single-instance: clustering / leader-election is v0.4.
+  # Running >1 replica concurrently is supported (subscribers should
+  # dedupe on event_id) but per-instance bookmarks and DLQs are not
+  # coordinated.
+  replicas: 1
+  strategy:
+    # The pipeline is at-least-once; a brief gap during rollout is
+    # fine, double-delivery is worse — RollingUpdate with
+    # maxUnavailable=1 is safer here than the default Recreate.
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: purple-wolf-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: purple-wolf-relay
+    spec:
+      securityContext:
+        # Match the distroless `nonroot` user.
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relay
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.3.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/purple-wolf-relay/relay.yaml
+            - --admin-addr=0.0.0.0:9090
+          ports:
+            - name: admin
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # secret_env names in relay.yaml resolve against the
+            # container env at startup. Source the values from the
+            # Secret rather than ConfigMap.
+            - name: SIEM_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: purple-wolf-relay-secrets
+                  key: SIEM_HMAC_SECRET
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/purple-wolf-relay
+              readOnly: true
+            - name: traefik-logs
+              mountPath: /var/log/traefik
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: purple-wolf-relay-config
+        - name: traefik-logs
+          # Project the Traefik access log into the relay container.
+          # Wire this however your environment exposes Traefik logs —
+          # a shared emptyDir / hostPath / sidecar tail, etc.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: purple-wolf-relay
+  namespace: purple-wolf
+  labels:
+    app.kubernetes.io/name: purple-wolf-relay
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: purple-wolf-relay
+  ports:
+    - name: admin
+      port: 9090
+      targetPort: admin
+      protocol: TCP
+---
+# Optional: PodMonitor for Prometheus Operator. Uncomment if your
+# cluster runs the Prometheus Operator.
+# apiVersion: monitoring.coreos.com/v1
+# kind: PodMonitor
+# metadata:
+#   name: purple-wolf-relay
+#   namespace: purple-wolf
+# spec:
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/name: purple-wolf-relay
+#   podMetricsEndpoints:
+#     - port: admin
+#       path: /metrics
+#       interval: 30s

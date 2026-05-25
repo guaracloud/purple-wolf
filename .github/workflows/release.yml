@@ -76,3 +76,126 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p purple-wolf-core
+
+      # ----- v0.3: purple-wolf-relay binaries + docker image -----
+      #
+      # Builds the relay for linux/{amd64,arm64} (via Buildx) and
+      # macos targets in a parallel job below, cosign-signs each
+      # binary + the image manifest, publishes the crate to crates.io
+      # (dry-run first, fail-closed). Tag pushes are gated by the
+      # release environment's required-reviewer rule.
+      - name: Build relay (linux/amd64)
+        run: cargo build --release -p purple-wolf-relay
+      - name: Compute relay SHA256 (linux/amd64)
+        run: |
+          sha256sum target/release/purple-wolf-relay \
+            > purple-wolf-relay-linux-amd64.sha256
+      - name: Cosign keyless sign the relay binary
+        run: |
+          cosign sign-blob --yes \
+            target/release/purple-wolf-relay \
+            --output-signature purple-wolf-relay-linux-amd64.sig \
+            --output-certificate purple-wolf-relay-linux-amd64.pem
+      - name: Verify the relay signature
+        run: |
+          cosign verify-blob \
+            --signature purple-wolf-relay-linux-amd64.sig \
+            --certificate purple-wolf-relay-linux-amd64.pem \
+            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            target/release/purple-wolf-relay
+      - name: Attach relay binary + sig to the release
+        uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
+        with:
+          files: |
+            target/release/purple-wolf-relay
+            purple-wolf-relay-linux-amd64.sha256
+            purple-wolf-relay-linux-amd64.sig
+            purple-wolf-relay-linux-amd64.pem
+
+      # Docker image: build multi-arch, push to GHCR, cosign-sign.
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build + push relay image
+        id: relay_image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: crates/purple-wolf-relay/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/guaracloud/purple-wolf-relay:${{ github.ref_name }}
+            ghcr.io/guaracloud/purple-wolf-relay:latest
+          provenance: true
+          sbom: true
+      - name: Cosign sign the image manifest
+        env:
+          DIGEST: ${{ steps.relay_image.outputs.digest }}
+        run: |
+          cosign sign --yes "ghcr.io/guaracloud/purple-wolf-relay@${DIGEST}"
+
+      - name: Verify relay crates.io publish would succeed (dry-run)
+        run: cargo publish -p purple-wolf-relay --dry-run
+      - name: Publish relay to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p purple-wolf-relay
+
+  # macOS binaries for the relay. Linux artifacts come from the
+  # publish-and-sign job; mac builds run here in parallel and attach
+  # to the same release.
+  publish-relay-macos:
+    needs: publish-and-sign
+    runs-on: macos-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build relay
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release -p purple-wolf-relay --target "$TARGET"
+      - name: Rename + SHA256
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          out="purple-wolf-relay-${TARGET}"
+          cp "target/${TARGET}/release/purple-wolf-relay" "$out"
+          shasum -a 256 "$out" > "${out}.sha256"
+      - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
+      - name: Cosign sign + verify
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          out="purple-wolf-relay-${TARGET}"
+          cosign sign-blob --yes "$out" \
+            --output-signature "${out}.sig" \
+            --output-certificate "${out}.pem"
+          cosign verify-blob \
+            --signature "${out}.sig" \
+            --certificate "${out}.pem" \
+            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "$out"
+      - uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
+        with:
+          files: |
+            purple-wolf-relay-${{ matrix.target }}
+            purple-wolf-relay-${{ matrix.target }}.sha256
+            purple-wolf-relay-${{ matrix.target }}.sig
+            purple-wolf-relay-${{ matrix.target }}.pem

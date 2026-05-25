@@ -1,0 +1,20 @@
+# Relay config for the docker-compose full-stack test.
+# Reads from a log file that Traefik writes via its docker-driver
+# logs (mounted into the relay container). For the integration test
+# harness, we use stdin instead — see the test harness for the
+# docker-compose log-tail wiring.
+sources:
+  - type: stdin
+
+subscribers:
+  - id: e2e
+    url: http://subscriber:8090/webhook
+    secret_env: INTEGRATION_SECRET
+    timeout_ms: 5000
+    retry:
+      max_attempts: 1
+      base_delay_ms: 100
+      max_delay_ms: 200
+
+relay:
+  instance_id: relay-integration

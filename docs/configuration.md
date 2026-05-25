@@ -21,6 +21,69 @@ config. Instead, Traefik's native middleware attachment provides per-route
 specificity: define multiple Middlewares with different configs and attach
 them to the respective IngressRoute rules.
 
+## Labels
+
+Every Middleware can attach a `labels` map of free-form `key=value`
+strings. The WAF echoes them verbatim in every audit-log entry produced
+by that Middleware, giving downstream consumers (log pipelines,
+[`purple-wolf-relay`](../crates/purple-wolf-relay/), SIEMs) a stable way
+to route or filter on operator-defined metadata.
+
+```yaml
+spec:
+  plugin:
+    purpleWolf:
+      mode: enforce
+      labels:
+        tenant: acme
+        service: checkout-api
+        environment: prod
+        region: us-east-1
+        compliance: pci-dss
+```
+
+### Schema
+
+| Constraint | Value |
+|---|---|
+| Key regex | `^[a-z][a-z0-9_.-]{0,62}$` (lowercase ASCII, OpenTelemetry resource-attribute style) |
+| Value | any UTF-8 up to 1024 bytes; ASCII control chars stripped at serialize time (CR/LF → `.`) |
+| Max keys per Middleware | 32 |
+| Max total bytes (keys + values) | 4096 |
+| Reserved prefix | `purple_wolf.*` — operator-set keys with this prefix are silently dropped and a warning is emitted to Traefik's log; reserved for fields the WAF or relay sets (`purple_wolf.middleware`, `purple_wolf.router`, …) |
+
+Violating any constraint is a parse error: the Middleware fails to
+load and Traefik's plugin-failure path takes over. With the default
+`failMode: failOpen` the plugin falls back to a deliberately-noisy
+"every detector in monitor" config so verdicts still surface — see
+[THREAT_MODEL.md §4](../THREAT_MODEL.md).
+
+### Cardinality warning
+
+Labels become high-cardinality metric dimensions if your relay or log
+pipeline derives Prometheus metrics from them. **Do not** set per-user
+or per-request values (`user_id`, `request_id`, `session_id`) in
+labels. Use them for *bounded* dimensions: tenant, service, environment,
+region, team, on-call rotation. The 32-key / 4 KiB caps are an upper
+bound, not a target.
+
+### Audit-log shape
+
+When labels are set, the audit-log JSON gains one field with keys in
+alphabetical order (so log queries stay grep-able):
+
+```json
+{
+  "host": "...",
+  "path": "...",
+  "...": "...",
+  "labels": { "environment": "prod", "service": "checkout-api", "tenant": "acme" }
+}
+```
+
+When no labels are set the field is omitted — v0.2 audit-log shape is
+preserved for backward compatibility with existing log queries.
+
 ## Source IP
 
 The plugin derives the source IP from `X-Forwarded-For` (after peeling
@@ -54,9 +117,16 @@ attribution go to the TCP peer.
 - **Audit log:** one JSON line per noteworthy request via the host log sink
   (visible in Traefik's logs). Fields: `host`, `path`, `query`, `method`,
   `source_ip`, `action`, `blocked_rule`, `blocked_severity`, `blocked_detail`,
-  `would_block_rules`.
+  `would_block_rules`, and (when configured) `labels` — see the
+  [Labels](#labels) section above for the schema.
 - **Metrics:** Traefik's built-in per-Middleware metrics; per-rule hit
   counts are derivable from audit-log fields via Loki/Promtail.
+- **Push delivery:** [`purple-wolf-relay`](../crates/purple-wolf-relay/)
+  (v0.3+) tails Traefik's log stream and fans out HMAC-signed webhooks
+  to subscribers. Subscriber filters match on the same `labels` map,
+  so per-tenant/per-service routing requires no parser plumbing on the
+  subscriber side. Wire protocol:
+  [docs/webhook-protocol.md](./webhook-protocol.md).
 
 ## Detection coverage and limitations
 

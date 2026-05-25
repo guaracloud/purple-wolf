@@ -1,0 +1,19 @@
+# Minimal purple-wolf-relay config.
+#
+# Reads purple-wolf audit lines from stdin, fans out to one webhook
+# subscriber. Suitable for local dev / smoke-testing the relay against
+# a single subscriber.
+#
+# Validate with:
+#   EXAMPLE_HMAC_SECRET=$(openssl rand -hex 32) \
+#   cargo run -p purple-wolf-relay -- \
+#     --config crates/purple-wolf-relay/examples/config.minimal.yaml \
+#     --validate-only
+
+sources:
+  - type: stdin
+
+subscribers:
+  - id: example
+    url: https://hooks.example.com/webhook
+    secret_env: EXAMPLE_HMAC_SECRET

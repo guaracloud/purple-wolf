@@ -1,0 +1,28 @@
+http:
+  routers:
+    enforce:
+      rule: "PathPrefix(`/e`)"
+      service: echo
+      middlewares: [strip-e, strict-waf]
+  services:
+    echo:
+      loadBalancer:
+        servers:
+          - url: "http://upstream:8000"
+  middlewares:
+    strip-e:
+      stripPrefix: { prefixes: ["/e"] }
+    strict-waf:
+      plugin:
+        purpleWolf:
+          mode: enforce
+          # v0.3 labels — these surface on every audit-log line
+          # for this Middleware and arrive at the subscriber via
+          # the envelope.
+          labels:
+            tenant: acme
+            service: integration-test
+            environment: ci
+          groups:
+            injection:  { enabled: true, mode: enforce }
+            signatures: { enabled: true, mode: enforce }

@@ -1,0 +1,18 @@
+[package]
+name = "purple-wolf-relay-integration"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# This is a docker-based integration crate, excluded from the
+# workspace (mirrors tests/traefik_integration). All tests are
+# #[ignore] by default — opt in with `--ignored` in CI matrix.
+
+[dependencies]
+
+[dev-dependencies]
+ureq = "2"
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"

@@ -2,7 +2,11 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.2 in development. See [THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed to catch, and [docs/configuration.md](docs/configuration.md) for the Middleware config reference.
+**Status:** v0.3 in development (audit labels + webhook relay). See
+[THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed
+to catch, and [docs/configuration.md](docs/configuration.md) for the
+Middleware config reference. The new webhook protocol contract lives in
+[docs/webhook-protocol.md](docs/webhook-protocol.md).
 
 ## What it does
 
@@ -24,11 +28,21 @@ internet → Traefik (TLS, routing, your existing setup)
                    → inspect → allow or block → forward to backend
 ```
 
-- Two crates: [`purple-wolf-core`](crates/purple-wolf-core) (the engine, pure
-  Rust, native + `wasm32-wasip1`) and
-  [`purple-wolf-traefik`](crates/purple-wolf-traefik) (http-wasm guest plugin).
+- Three crates:
+  [`purple-wolf-core`](crates/purple-wolf-core) (the engine, pure Rust,
+  native + `wasm32-wasip1`),
+  [`purple-wolf-traefik`](crates/purple-wolf-traefik) (http-wasm guest
+  plugin), and (v0.3+)
+  [`purple-wolf-relay`](crates/purple-wolf-relay) — a standalone
+  webhook fan-out service that tails Traefik's audit-log stream and
+  delivers HMAC-signed events to subscribers.
 - Multi-tenant by construction: each `Middleware` CRD is a separate plugin
   instantiation with its own slice of WASM memory.
+- **Push delivery (v0.3+):** the WAF stays focused on detection; if you
+  want signed webhooks to a SIEM, Slack, or per-tenant subscriber, run
+  the relay alongside Traefik. See the relay's
+  [README](crates/purple-wolf-relay/README.md) and the
+  [webhook protocol spec](docs/webhook-protocol.md).
 
 ## Quick start (Traefik)
 

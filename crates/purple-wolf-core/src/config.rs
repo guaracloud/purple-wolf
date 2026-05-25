@@ -1,5 +1,13 @@
 //! Configuration types parsed from TOML or JSON.
 use serde::Deserialize;
+use std::collections::BTreeMap;
+
+/// Maximum number of label keys per Middleware. See `docs/configuration.md`.
+pub const MAX_LABEL_KEYS: usize = 32;
+/// Maximum total bytes summed across all key+value pairs (label budget).
+pub const MAX_LABEL_BYTES: usize = 4096;
+/// Maximum byte length of a single label value.
+pub const MAX_LABEL_VALUE_BYTES: usize = 1024;
 
 /// Global WAF behavior switch: log-only or block-and-log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -184,6 +192,17 @@ pub struct Config {
     /// X-Forwarded-For trust model. Drives [`crate::request::client_ip`].
     #[serde(default)]
     pub xff: XffConfig,
+    /// Operator-supplied labels echoed into every audit-log line for
+    /// this Middleware. Opaque to the WAF; consumed by downstream log
+    /// pipelines or `purple-wolf-relay` (v0.3) for routing/filtering.
+    ///
+    /// Keys must match `^[a-z][a-z0-9_.-]{0,62}$`. Keys starting with
+    /// `purple_wolf.` are reserved for fields the WAF/relay set; the
+    /// Traefik wire adapter drops operator-set keys with that prefix.
+    /// At most `MAX_LABEL_KEYS` keys, `MAX_LABEL_BYTES` total bytes,
+    /// per-value bytes capped at `MAX_LABEL_VALUE_BYTES`.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -197,6 +216,53 @@ impl Config {
     pub fn parse_json(bytes: &[u8]) -> Result<Config, serde_json::Error> {
         serde_json::from_slice(bytes)
     }
+}
+
+/// Validate a label map against the documented caps. Returns `Err(msg)`
+/// describing the first violation; messages name the offending key so a
+/// tenant can fix their YAML immediately. Purity-preserving: does not
+/// mutate; ASCII-control scrubbing of values happens at audit-emit time.
+pub fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), String> {
+    if labels.len() > MAX_LABEL_KEYS {
+        return Err(format!(
+            "labels: {} keys exceeds maximum {MAX_LABEL_KEYS}",
+            labels.len()
+        ));
+    }
+    let mut total: usize = 0;
+    for (k, v) in labels {
+        if !is_valid_label_key(k) {
+            return Err(format!(
+                "labels: key {k:?} does not match ^[a-z][a-z0-9_.-]{{0,62}}$"
+            ));
+        }
+        if v.len() > MAX_LABEL_VALUE_BYTES {
+            return Err(format!(
+                "labels: value for key {k:?} is {} bytes; max {MAX_LABEL_VALUE_BYTES}",
+                v.len()
+            ));
+        }
+        total = total.saturating_add(k.len()).saturating_add(v.len());
+    }
+    if total > MAX_LABEL_BYTES {
+        return Err(format!(
+            "labels: total size {total} bytes exceeds {MAX_LABEL_BYTES}"
+        ));
+    }
+    Ok(())
+}
+
+fn is_valid_label_key(k: &str) -> bool {
+    let bytes = k.as_bytes();
+    if bytes.is_empty() || bytes.len() > 63 {
+        return false;
+    }
+    if !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    bytes[1..]
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 #[cfg(test)]
@@ -318,5 +384,107 @@ mod tests {
             cfg_json.reputation.deny_list,
             vec!["10.0.0.1", "203.0.113.5"]
         );
+    }
+
+    // ----- v0.3 labels -----
+
+    #[test]
+    fn labels_default_empty_when_omitted() {
+        let json = br#"{
+            "mode":"monitor",
+            "fail_mode":"fail_open",
+            "body":{"max_inspect_bytes":1024,"over_cap":"pass"}
+        }"#;
+        let cfg = Config::parse_json(json).unwrap();
+        assert!(cfg.labels.is_empty());
+    }
+
+    #[test]
+    fn labels_serialize_in_alphabetical_order() {
+        // BTreeMap iteration is alphabetical → JSON output is deterministic.
+        // The audit-log path relies on this ordering so log queries stay
+        // grep-able. This test pins the property at the data-structure level.
+        let labels: BTreeMap<String, String> =
+            BTreeMap::from([("zebra".into(), "z".into()), ("alpha".into(), "a".into())]);
+        let json = serde_json::to_string(&labels).unwrap();
+        assert_eq!(json, r#"{"alpha":"a","zebra":"z"}"#);
+    }
+
+    #[test]
+    fn validate_labels_accepts_empty() {
+        validate_labels(&BTreeMap::new()).unwrap();
+    }
+
+    #[test]
+    fn validate_labels_rejects_too_many() {
+        let labels: BTreeMap<String, String> =
+            (0..33).map(|i| (format!("k{i}"), "v".into())).collect();
+        let err = validate_labels(&labels).unwrap_err();
+        assert!(err.contains("33 keys"), "msg: {err}");
+    }
+
+    #[test]
+    fn validate_labels_rejects_invalid_key_prefix() {
+        let labels = BTreeMap::from([("Service".into(), "ok".into())]);
+        let err = validate_labels(&labels).unwrap_err();
+        assert!(err.contains("Service"), "msg: {err}");
+    }
+
+    #[test]
+    fn validate_labels_rejects_empty_key() {
+        let labels = BTreeMap::from([(String::new(), "v".into())]);
+        let err = validate_labels(&labels).unwrap_err();
+        // The key is empty so the message quotes "" — but it must still
+        // surface the regex constraint so the operator knows what's wrong.
+        assert!(err.contains("does not match"), "msg: {err}");
+    }
+
+    #[test]
+    fn validate_labels_rejects_overlong_key() {
+        let labels = BTreeMap::from([("a".repeat(64), "v".into())]);
+        let err = validate_labels(&labels).unwrap_err();
+        assert!(err.contains("does not match"), "msg: {err}");
+    }
+
+    #[test]
+    fn validate_labels_rejects_oversize_value() {
+        let labels = BTreeMap::from([("k".into(), "x".repeat(MAX_LABEL_VALUE_BYTES + 1))]);
+        let err = validate_labels(&labels).unwrap_err();
+        assert!(err.contains("\"k\""), "msg: {err}");
+        assert!(err.contains("max"), "msg: {err}");
+    }
+
+    #[test]
+    fn validate_labels_rejects_oversize_total() {
+        // 30 keys * ~200 bytes each → ~6 KB, over the 4 KB total cap.
+        let labels: BTreeMap<String, String> = (0..30)
+            .map(|i| (format!("k{i:02}"), "x".repeat(200)))
+            .collect();
+        let err = validate_labels(&labels).unwrap_err();
+        assert!(err.contains("exceeds 4096"), "msg: {err}");
+    }
+
+    #[test]
+    fn validate_labels_accepts_purple_wolf_prefix_at_core_level() {
+        // The core schema accepts reserved-prefix labels; the wire adapter
+        // (Phase A Task 2) is responsible for dropping them. This test pins
+        // that the *core* doesn't reject them — keeping the schema simple
+        // means a future relay-set label can land in Config without a
+        // surprise validation tightening.
+        let labels = BTreeMap::from([("purple_wolf.middleware".into(), "set-by-user".into())]);
+        validate_labels(&labels).unwrap();
+    }
+
+    #[test]
+    fn validate_labels_accepts_legal_key_alphabet() {
+        let labels = BTreeMap::from([
+            ("alpha".into(), "v".into()),
+            ("with_underscore".into(), "v".into()),
+            ("with.dot".into(), "v".into()),
+            ("with-dash".into(), "v".into()),
+            ("ends9".into(), "v".into()),
+            ("a".repeat(63), "v".into()),
+        ]);
+        validate_labels(&labels).unwrap();
     }
 }

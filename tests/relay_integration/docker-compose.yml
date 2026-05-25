@@ -1,0 +1,52 @@
+services:
+  upstream:
+    image: python:3-alpine
+    command: ["python", "-m", "http.server", "8000"]
+
+  subscriber:
+    # Tiny Flask-based mock subscriber that records each request
+    # body to /shared/requests.jsonl so the integration test can
+    # introspect them from outside the container.
+    image: python:3-alpine
+    working_dir: /app
+    volumes:
+      - ./subscriber:/app:ro
+      - ./shared:/shared
+    command: ["sh", "-c", "pip install --quiet flask && python /app/subscriber.py"]
+    environment:
+      - PURPLEWOLF_SECRET=integration-test-secret
+      - RECORD_PATH=/shared/requests.jsonl
+    ports: ["8090:8090"]
+
+  traefik:
+    image: traefik:v3
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports: ["8080:8080"]
+    volumes:
+      - ./traefik:/etc/traefik:ro
+      - ./plugin/.traefik.yml:/plugins-local/src/github.com/guaracloud/purple-wolf/.traefik.yml:ro
+      - ../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm:/plugins-local/src/github.com/guaracloud/purple-wolf/plugin.wasm:ro
+    depends_on:
+      - upstream
+
+  relay:
+    # The relay is built from source by docker-compose via the
+    # Dockerfile that lands in Phase I Task 29; for now we mount the
+    # already-built debug binary.
+    image: rust:1.85-slim
+    working_dir: /workspace
+    command:
+      - "sh"
+      - "-c"
+      - "/workspace/target/debug/purple-wolf-relay --config /etc/relay/relay.yaml --admin-addr 0.0.0.0:9090"
+    volumes:
+      - ../..:/workspace:ro
+      - ./relay:/etc/relay:ro
+    environment:
+      - INTEGRATION_SECRET=integration-test-secret
+      - RUST_LOG=info
+    depends_on:
+      - subscriber
+      - traefik
+    ports: ["9090:9090"]
