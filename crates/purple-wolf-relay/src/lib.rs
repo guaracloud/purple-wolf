@@ -11,6 +11,7 @@ pub mod admin;
 pub mod config;
 pub mod metrics;
 pub mod pipeline;
+pub mod sources;
 
 use std::sync::Arc;
 use tokio::sync::broadcast;
