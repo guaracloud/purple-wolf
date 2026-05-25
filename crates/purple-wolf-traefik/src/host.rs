@@ -179,12 +179,38 @@ fn read_buf(mut call: impl FnMut(*mut u8, i32) -> i32) -> Vec<u8> {
         buf.truncate(needed);
         return buf;
     }
-    let cap = needed.min(MAX_ALLOC);
+    // NEW-H5 guard: if the host asks for more than our hard cap, a second
+    // call with `buf_limit < needed` would (per http-wasm spec) cause the
+    // host to write nothing and return the same huge `needed` again — we'd
+    // then hand back MAX_ALLOC bytes of zeros as if they were real data.
+    // Truncate the request honestly instead and log so the operator can
+    // see the underrun in audit logs.
+    if needed > MAX_ALLOC {
+        log_bytes(
+            LogLevel::Warn,
+            format!(
+                "purple-wolf: host requested {needed} bytes for a single read, exceeds MAX_ALLOC={MAX_ALLOC}; returning empty buffer rather than risk zero-padded data"
+            )
+            .as_bytes(),
+        );
+        return Vec::new();
+    }
+    let cap = needed;
     let mut big = vec![0u8; cap];
     // SAFETY: same invariants as the first call; buffer is sized to the host's
-    // requested length (clamped to MAX_ALLOC).
+    // requested length (no longer clamped, since needed <= MAX_ALLOC).
     let actual = call(big.as_mut_ptr(), big.len() as i32);
-    let actual = (actual.max(0) as usize).min(cap);
+    let actual = actual.max(0) as usize;
+    // Defense in depth: if a misbehaving host still reports more than the
+    // buffer we just gave it, refuse to forward the contents rather than
+    // pass uninitialized/zeroed bytes downstream.
+    if actual > cap {
+        log_bytes(
+            LogLevel::Warn,
+            b"purple-wolf: host returned more bytes than buf_limit on retry; discarding",
+        );
+        return Vec::new();
+    }
     big.truncate(actual);
     big
 }
@@ -313,7 +339,13 @@ fn drain_request_body(max: usize) -> BodyRead {
     // Read until either (a) host signals EOF, (b) we have buffered `max`
     // bytes and one more probe confirms additional data, or (c) we hit the
     // MAX_ALLOC ceiling.
-    let chunk_size = SCRATCH.min(max.saturating_add(SCRATCH));
+    //
+    // NEW-H4 guard: the loop must also break on `(size == 0, eof == false)`.
+    // The http-wasm spec doesn't forbid an interim empty read; without the
+    // guard a non-EOF empty read keeps re-issuing forever and hangs the
+    // request (and the wasm guest's request slot, leaking through to a
+    // Traefik backend timeout).
+    let chunk_size = SCRATCH;
     let mut out = Vec::with_capacity(max.min(SCRATCH));
     let mut scratch = vec![0u8; chunk_size];
     let mut exceeded = false;
@@ -339,9 +371,12 @@ fn drain_request_body(max: usize) -> BodyRead {
         if eof || out.len() >= MAX_ALLOC {
             break;
         }
-        // No exceeded check yet but we've already filled `max`: probe once
-        // more on the next loop iteration to detect leftover bytes; the loop
-        // above will set `exceeded = true` on the next non-empty read.
+        // NEW-H4: zero-progress guard. If the host returned 0 bytes AND
+        // hasn't signalled EOF, there's nothing for us to do — looping
+        // would just re-issue the empty read forever.
+        if size == 0 {
+            break;
+        }
     }
     BodyRead {
         bytes: out,
