@@ -142,10 +142,24 @@ pub struct ReputationConfig {
     /// IP addresses that are always blocked regardless of rate.
     #[serde(default)]
     pub deny_list: Vec<String>,
+    /// Maximum distinct source IPs the per-IP rate-limiter will track.
+    /// When this cap is reached the least-recently-seen entry is evicted.
+    ///
+    /// Bounds memory use under adversarial IP rotation (NEW-H2). The
+    /// default of 50,000 entries is a soft cap: a token-bucket entry
+    /// is well under a kilobyte, so the worst-case memory footprint
+    /// stays under tens of MB even under attack. Operators with
+    /// genuinely high cardinality (large CDN footprints) can raise it.
+    #[serde(default = "default_reputation_max_tracked_ips")]
+    pub max_tracked_ips: usize,
 }
 
 fn default_reputation_per_second() -> u32 {
     100
+}
+
+fn default_reputation_max_tracked_ips() -> usize {
+    50_000
 }
 
 impl Default for ReputationConfig {
@@ -153,6 +167,7 @@ impl Default for ReputationConfig {
         ReputationConfig {
             per_second: default_reputation_per_second(),
             deny_list: Vec::new(),
+            max_tracked_ips: default_reputation_max_tracked_ips(),
         }
     }
 }

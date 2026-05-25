@@ -182,10 +182,22 @@ struct WireReputation {
     per_second: u32,
     #[serde(default)]
     deny_list: Vec<String>,
+    /// Cap on the per-IP rate-limit map (NEW-H2). Defaults to 50,000;
+    /// raising it lets a tenant absorb more legitimate cardinality at
+    /// the cost of more memory under adversarial IP rotation.
+    #[serde(
+        default = "default_max_tracked_ips",
+        deserialize_with = "de_lenient_usize"
+    )]
+    max_tracked_ips: usize,
 }
 
 fn default_per_second() -> u32 {
     100
+}
+
+fn default_max_tracked_ips() -> usize {
+    50_000
 }
 
 impl Default for WireReputation {
@@ -193,6 +205,7 @@ impl Default for WireReputation {
         WireReputation {
             per_second: default_per_second(),
             deny_list: Vec::new(),
+            max_tracked_ips: default_max_tracked_ips(),
         }
     }
 }
@@ -202,6 +215,7 @@ impl From<WireReputation> for core::ReputationConfig {
         core::ReputationConfig {
             per_second: w.per_second,
             deny_list: w.deny_list,
+            max_tracked_ips: w.max_tracked_ips,
         }
     }
 }

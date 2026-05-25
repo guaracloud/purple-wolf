@@ -28,7 +28,11 @@ fn engine(cfg: &Config) -> Engine {
         Box::new(InjectionDetector),
         Box::new(SignatureDetector::new()),
         Box::new(StructuralDetector),
-        Box::new(ReputationDetector::new(cfg.reputation.per_second, ips)),
+        Box::new(ReputationDetector::with_capacity(
+            cfg.reputation.per_second,
+            ips,
+            cfg.reputation.max_tracked_ips,
+        )),
     ])
 }
 

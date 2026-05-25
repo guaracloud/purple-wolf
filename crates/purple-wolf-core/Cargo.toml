@@ -13,9 +13,12 @@ publish     = true
 serde      = { workspace = true }
 serde_json = { workspace = true }
 aho-corasick = { workspace = true }
-governor   = { workspace = true }
 percent-encoding = { workspace = true }
 toml       = "0.8"
+# governor was removed in v0.2 (NEW-H2) — its DashMap-backed keyed store
+# is unbounded, and on wasm32 it pulls a large futures stack we don't need.
+# Replaced by a tiny in-crate bounded LRU token bucket in
+# crates/purple-wolf-core/src/detectors/reputation.rs.
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
