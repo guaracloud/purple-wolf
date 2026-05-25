@@ -57,6 +57,7 @@ fn state<R>(f: impl FnOnce(&Config, &Engine) -> R) -> R {
                     },
                     groups: purple_wolf_core::config::Groups::all_monitor(),
                     reputation: ReputationConfig::default(),
+                    xff: purple_wolf_core::config::XffConfig::default(),
                 }
             });
             let eng = engine(&cfg);
@@ -102,7 +103,11 @@ fn inspect() -> Action {
             .filter_map(|n| host::get_request_header(n).map(|v| (n.to_lowercase(), v)))
             .collect();
 
-        // Source IP: XFF → X-Real-IP → peer.
+        // Source IP: XFF → X-Real-IP → peer, gated by the configured XFF
+        // trust model. Default trusted_hops=0 means "ignore XFF, use peer";
+        // operators behind a trusted edge bump it to the number of trusted
+        // proxies. See `purple_wolf_core::request::client_ip` for the
+        // full trust-model docs.
         let peer: IpAddr = host::get_source_addr()
             .rsplit_once(':')
             .map(|(h, _)| h)
@@ -111,7 +116,7 @@ fn inspect() -> Action {
             .trim_end_matches(']')
             .parse()
             .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-        let source_ip = request::client_ip(&headers, peer);
+        let source_ip = request::client_ip(&headers, peer, cfg.xff.trusted_hops);
 
         // URI split.
         let uri = host::get_uri();

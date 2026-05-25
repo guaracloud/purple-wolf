@@ -21,3 +21,9 @@ spec:
       reputation:
         perSecond: 100
         denyList: []
+      xff:
+        # Single Traefik in front of the plugin — peel one trusted hop so
+        # the reputation detector keys on the real client, not Traefik's IP.
+        # Bump to 2-3 if you have additional trusted proxies (Cloudflare, ALB).
+        # Leave at 0 if your route is exposed directly without a trusted edge.
+        trustedHops: 1

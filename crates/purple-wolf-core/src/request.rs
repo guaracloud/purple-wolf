@@ -160,31 +160,66 @@ fn parse_query(raw: &str) -> Vec<(String, String)> {
 /// Derive the client's source IP from proxy headers, falling back to the
 /// direct peer address.
 ///
-/// Resolution order:
-/// 1. `X-Forwarded-For` — use the leftmost valid IP (first trustworthy hop).
-/// 2. `X-Real-IP` — use if present and parseable.
-/// 3. `peer` — direct connection address.
+/// **Trust model (RFC 7239 §5.2):** `X-Forwarded-For` is a chain
+/// `client, proxy1, proxy2, …` where each proxy *appends* the address it
+/// observed. The **leftmost** entry is the client-asserted IP — the *least*
+/// trustworthy hop, because any client behind a trusted edge can put
+/// whatever it wants there. The **rightmost** entries are added by your own
+/// infrastructure and are trustworthy to the degree you trust those proxies.
 ///
-/// Header lookup is case-insensitive. Malformed or missing values are skipped.
-pub fn client_ip(headers: &[(String, String)], peer: IpAddr) -> IpAddr {
-    // Walk headers for X-Forwarded-For (case-insensitive).
-    for (k, v) in headers {
-        if k.eq_ignore_ascii_case("x-forwarded-for") {
-            for part in v.split(',') {
-                if let Ok(ip) = part.trim().parse::<IpAddr>() {
+/// `trust_hops` is the number of *trusted* rightmost hops to peel off; the
+/// returned IP is the leftmost untrusted-but-parseable entry after peeling
+/// (i.e. the client as observed by your outermost trusted proxy). With
+/// `trust_hops == 0` the function falls back directly to `peer`, which is
+/// the only IP your wasm guest can actually verify.
+///
+/// Common settings:
+/// - **0** (default) — you do not trust XFF at all. The reputation
+///   detector keys on the TCP peer; XFF is ignored. Safe everywhere,
+///   even on a tenant route directly exposed to the internet.
+/// - **1** — one trusted proxy (Traefik) in front of the wasm guest.
+///   This is the most common managed-platform shape.
+/// - **N** — N trusted proxies (e.g. Cloudflare → ALB → Traefik = 2 or 3).
+///
+/// Misconfiguring this is a self-DoS / impersonation primitive: with too
+/// high a value, attackers can put any IP they like in the leftmost XFF
+/// slot and either pin per-IP rate-limit budgets to a victim's address or
+/// rotate IPs to exhaust the rate-limiter's memory.
+///
+/// Resolution order: walk XFF after peeling `trust_hops` rightmost entries,
+/// then fall through to `X-Real-IP` (matching the canonical Traefik
+/// behavior), then to `peer`. Header lookup is case-insensitive. Malformed
+/// values are skipped.
+pub fn client_ip(headers: &[(String, String)], peer: IpAddr, trust_hops: usize) -> IpAddr {
+    if trust_hops > 0 {
+        for (k, v) in headers {
+            if k.eq_ignore_ascii_case("x-forwarded-for") {
+                let parts: Vec<&str> = v.split(',').map(str::trim).collect();
+                // Peel `trust_hops` rightmost entries; if we peel everything,
+                // there's no untrusted hop left, so the request originated
+                // *from* one of our trusted proxies — return `peer`.
+                if parts.len() > trust_hops {
+                    let cut = parts.len() - trust_hops;
+                    for part in &parts[..cut] {
+                        if let Ok(ip) = part.parse::<IpAddr>() {
+                            return ip;
+                        }
+                    }
+                }
+            }
+        }
+        // Fall through to X-Real-IP — Traefik's canonical "real client" hint,
+        // which it sets after applying its own trustedIPs configuration.
+        for (k, v) in headers {
+            if k.eq_ignore_ascii_case("x-real-ip") {
+                if let Ok(ip) = v.trim().parse::<IpAddr>() {
                     return ip;
                 }
             }
         }
     }
-    // Fall through to X-Real-IP.
-    for (k, v) in headers {
-        if k.eq_ignore_ascii_case("x-real-ip") {
-            if let Ok(ip) = v.trim().parse::<IpAddr>() {
-                return ip;
-            }
-        }
-    }
+    // trust_hops == 0, or peeling exhausted the chain: the only address
+    // we can verify is the TCP peer.
     peer
 }
 
@@ -347,54 +382,88 @@ mod tests {
         assert_eq!(v.inspectable_fields(), vec!["/path", "qv", "body", "ck"]);
     }
 
-    // ── client_ip tests ──────────────────────────────────────────────────────
+    // ── client_ip tests (trust model — NEW-H3) ──────────────────────────────
 
     #[test]
-    fn client_ip_uses_xff_single() {
-        let h = vec![("x-forwarded-for".to_string(), "203.0.113.7".to_string())];
+    fn client_ip_with_trust_hops_zero_always_returns_peer() {
+        // Even with a populated XFF, trust_hops=0 means "I do not trust XFF".
+        // This is the safe default: any tenant route exposed to the
+        // internet without an explicit `trustedHops` setting cannot be
+        // self-DoS'd via spoofed XFF.
+        let h = vec![(
+            "x-forwarded-for".to_string(),
+            "203.0.113.7, 10.0.0.1".to_string(),
+        )];
+        assert_eq!(client_ip(&h, peer(), 0), peer());
+    }
+
+    #[test]
+    fn client_ip_with_one_trusted_hop_peels_rightmost() {
+        // Chain: client(203.0.113.7), trusted-edge(10.0.0.1). trust_hops=1
+        // peels the trusted-edge entry; the client-asserted IP wins.
+        let h = vec![(
+            "x-forwarded-for".to_string(),
+            "203.0.113.7, 10.0.0.1".to_string(),
+        )];
         assert_eq!(
-            client_ip(&h, peer()),
+            client_ip(&h, peer(), 1),
             "203.0.113.7".parse::<IpAddr>().unwrap()
         );
     }
 
     #[test]
-    fn client_ip_uses_xff_leftmost_parseable_with_spaces() {
+    fn client_ip_with_two_trusted_hops_peels_two_rightmost() {
+        // Chain: client, cloudflare-edge, alb. trust_hops=2 peels both edges.
         let h = vec![(
             "x-forwarded-for".to_string(),
-            " 203.0.113.7 , 10.0.0.1 , 10.0.0.2".to_string(),
+            "203.0.113.7, 10.0.0.1, 10.0.0.2".to_string(),
         )];
         assert_eq!(
-            client_ip(&h, peer()),
+            client_ip(&h, peer(), 2),
             "203.0.113.7".parse::<IpAddr>().unwrap()
         );
     }
 
     #[test]
-    fn client_ip_falls_through_xff_garbage_to_next_valid() {
+    fn client_ip_when_trust_exhausts_chain_returns_peer() {
+        // Chain has 1 entry, trust_hops says 3 are trusted — the request
+        // came directly from one of our trusted proxies (no client hop in
+        // the chain). Returning peer is the only honest answer.
+        let h = vec![("x-forwarded-for".to_string(), "10.0.0.1".to_string())];
+        assert_eq!(client_ip(&h, peer(), 3), peer());
+    }
+
+    #[test]
+    fn client_ip_falls_through_garbage_after_peeling() {
+        // After peeling the rightmost trusted hop, the next-leftmost is
+        // garbage; we fall through to the next parseable entry.
         let h = vec![(
             "x-forwarded-for".to_string(),
-            "not-an-ip, 198.51.100.5".to_string(),
+            "not-an-ip, 198.51.100.5, 10.0.0.1".to_string(),
         )];
         assert_eq!(
-            client_ip(&h, peer()),
+            client_ip(&h, peer(), 1),
             "198.51.100.5".parse::<IpAddr>().unwrap()
         );
     }
 
     #[test]
-    fn client_ip_uses_x_real_ip_when_no_xff() {
+    fn client_ip_uses_x_real_ip_when_xff_absent_and_hops_set() {
+        // Traefik strips XFF and sets X-Real-IP after applying its own
+        // trustedIPs configuration; respect it when trust_hops > 0.
         let h = vec![("x-real-ip".to_string(), "198.51.100.9".to_string())];
         assert_eq!(
-            client_ip(&h, peer()),
+            client_ip(&h, peer(), 1),
             "198.51.100.9".parse::<IpAddr>().unwrap()
         );
     }
 
     #[test]
-    fn client_ip_falls_back_to_peer_when_no_headers() {
-        let h: Vec<(String, String)> = vec![];
-        assert_eq!(client_ip(&h, peer()), peer());
+    fn client_ip_ignores_x_real_ip_when_hops_zero() {
+        // X-Real-IP is also part of the XFF-trust chain — without explicit
+        // opt-in, we don't trust it either.
+        let h = vec![("x-real-ip".to_string(), "198.51.100.9".to_string())];
+        assert_eq!(client_ip(&h, peer(), 0), peer());
     }
 
     #[test]
@@ -403,6 +472,6 @@ mod tests {
             ("x-forwarded-for".to_string(), "not-an-ip".to_string()),
             ("x-real-ip".to_string(), "also-not".to_string()),
         ];
-        assert_eq!(client_ip(&h, peer()), peer());
+        assert_eq!(client_ip(&h, peer(), 1), peer());
     }
 }

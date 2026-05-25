@@ -152,6 +152,28 @@ impl From<WireGroups> for core::Groups {
     }
 }
 
+/// camelCase + lenient-int wrapper for `core::XffConfig`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WireXff {
+    #[serde(default, deserialize_with = "de_lenient_usize")]
+    trusted_hops: usize,
+}
+
+impl Default for WireXff {
+    fn default() -> Self {
+        WireXff { trusted_hops: 0 }
+    }
+}
+
+impl From<WireXff> for core::XffConfig {
+    fn from(w: WireXff) -> Self {
+        core::XffConfig {
+            trusted_hops: w.trusted_hops,
+        }
+    }
+}
+
 /// camelCase + lenient-int wrapper for `core::ReputationConfig`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -226,6 +248,8 @@ struct Wire {
     groups: WireGroups,
     #[serde(default)]
     reputation: WireReputation,
+    #[serde(default)]
+    xff: WireXff,
 }
 
 fn default_fail_mode() -> WireFailMode {
@@ -248,6 +272,7 @@ pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
         },
         groups: w.groups.into(),
         reputation: w.reputation.into(),
+        xff: w.xff.into(),
     };
     cfg.groups
         .injection

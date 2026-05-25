@@ -12,6 +12,7 @@
 | `groups.reputation` | `{ enabled, mode }` | `{false, monitor}` | Per-IP rate limit + IP deny list. |
 | `reputation.perSecond` | int | `100` | Per-IP token rate. **Per Traefik pod**; effective rate = configured × pod count. |
 | `reputation.denyList` | list[string] | `[]` | IPs (or "ip:port" forms) to deny unconditionally. |
+| `xff.trustedHops` | int | `0` | Number of trusted rightmost `X-Forwarded-For` proxies to peel before reading the client IP (drives reputation/audit keying). **`0` = ignore XFF and use the TCP peer** (safe default). Set to the count of trusted proxies between you and the public internet — typically `1` for a single Traefik in front of the plugin. Misconfiguring this is a self-DoS primitive (see Source IP below). |
 
 ## Per-route specificity
 
@@ -22,9 +23,31 @@ them to the respective IngressRoute rules.
 
 ## Source IP
 
-The plugin derives the source IP from `X-Forwarded-For` (first valid
-`IpAddr`) → `X-Real-IP` → the TCP peer. Configure Traefik's `trustedIPs`
-on the entrypoint so XFF is honored.
+The plugin derives the source IP from `X-Forwarded-For` (after peeling
+`xff.trustedHops` trusted rightmost entries) → `X-Real-IP` → the TCP
+peer.
+
+**Defaults are safe.** With `xff.trustedHops: 0` (the default), XFF is
+ignored entirely — the rate-limiter and audit log key on the TCP peer.
+This is correct everywhere, including on a tenant route exposed directly
+to the internet.
+
+**Behind a trusted edge (recommended in production):** set
+`xff.trustedHops` to the count of proxies between the public internet
+and the Traefik pod. With a single Traefik in front of the plugin,
+that's `1`. With Cloudflare → ALB → Traefik, it's `2` or `3`.
+Independently, configure Traefik's `entryPoints.<name>.forwardedHeaders.
+trustedIPs` so Traefik itself respects only XFF entries from its trusted
+upstream CIDRs.
+
+**Why this matters:** RFC 7239 specifies the leftmost XFF entry is the
+*client-asserted* IP — the least trustworthy hop, because any client
+behind your edge can put whatever it wants there. With too high a
+`trustedHops` an attacker can pin per-IP rate-limit budgets to a victim
+address (impersonation DoS) or rotate IPs in the leftmost slot to
+exhaust the rate-limiter's memory. The default `0` removes this entire
+class of issue at the cost of having all rate-limit and audit
+attribution go to the TCP peer.
 
 ## Observability
 

@@ -109,6 +109,28 @@ impl Groups {
     }
 }
 
+/// `X-Forwarded-For` trust model. Drives [`crate::request::client_ip`].
+///
+/// The plugin runs *inside* Traefik, so it sees TCP peer = the previous
+/// trusted hop. `trusted_hops` is the number of trusted proxies between
+/// the wasm guest and the public internet: 0 = ignore XFF entirely
+/// (safe default), 1 = trust the single proxy that fronts you, N = trust
+/// N rightmost entries. See `client_ip` for the full rationale.
+#[derive(Debug, Clone, Deserialize)]
+pub struct XffConfig {
+    /// Number of trusted rightmost XFF hops to peel before reading the
+    /// client-asserted IP. Default `0` (do not trust XFF — fall back to
+    /// the TCP peer).
+    #[serde(default)]
+    pub trusted_hops: usize,
+}
+
+impl Default for XffConfig {
+    fn default() -> XffConfig {
+        XffConfig { trusted_hops: 0 }
+    }
+}
+
 /// Reputation-detector tuning. Lives in the top-level config because it
 /// shapes detector construction at process start; per-request behaviour
 /// is governed by the group's mode in `[groups.reputation]`.
@@ -150,6 +172,9 @@ pub struct Config {
     /// Reputation detector tuning (rate limit and deny list).
     #[serde(default)]
     pub reputation: ReputationConfig,
+    /// X-Forwarded-For trust model. Drives [`crate::request::client_ip`].
+    #[serde(default)]
+    pub xff: XffConfig,
 }
 
 impl Config {

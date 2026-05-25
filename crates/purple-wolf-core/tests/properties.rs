@@ -55,15 +55,19 @@ proptest! {
         prop_assert_eq!(&r.host,   &host.to_ascii_lowercase());
     }
 
-    /// `client_ip` always returns SOME IpAddr — never panics.
+    /// `client_ip` always returns SOME IpAddr — never panics — across the
+    /// {trust_hops × XFF × X-Real-IP} space.
     #[test]
-    fn client_ip_total(xff in "[0-9\\.,\\s]{0,128}", real in "[0-9\\.]{0,32}") {
+    fn client_ip_total(
+        xff in "[0-9\\.,\\s]{0,128}",
+        real in "[0-9\\.]{0,32}",
+        hops in 0usize..4,
+    ) {
         let headers = vec![
             ("x-forwarded-for".to_string(), xff),
             ("x-real-ip".to_string(), real),
         ];
-        let _ = client_ip(&headers, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        let _ = client_ip(&headers, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), hops);
         // The function returning any IpAddr is the property.
-        prop_assert!(true);
     }
 }
