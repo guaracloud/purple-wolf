@@ -27,6 +27,10 @@ use serde::Deserialize;
 /// Accepts a JSON boolean OR a stringified boolean (`"true"` / `"false"`,
 /// case-insensitive, with a few common spellings) — Traefik stringifies
 /// scalars when forwarding plugin config to the http-wasm guest.
+///
+/// Empty string is rejected (NEW-M6): an `enabled: ""` is almost always
+/// a tenant typo, not a deliberate "off" directive, and silently mapping
+/// it to `false` disables the detector with no operator-visible signal.
 fn de_lenient_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -38,7 +42,7 @@ fn de_lenient_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
         V::Bool(b) => Ok(b),
         V::Str(s) => match s.trim().to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" | "on" => Ok(true),
-            "false" | "0" | "no" | "off" | "" => Ok(false),
+            "false" | "0" | "no" | "off" => Ok(false),
             other => Err(D::Error::custom(format!(
                 "invalid boolean string {other:?}"
             ))),
@@ -277,6 +281,23 @@ fn default_group(enabled: bool, mode: core::GroupMode) -> core::GroupConfig {
 /// Parse the raw JSON bytes Traefik hands the plugin.
 pub fn parse(bytes: &[u8]) -> Result<core::Config, String> {
     let w: Wire = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    // NEW-M7: range validation. Pre-fix the adapter silently coerced
+    // `perSecond: 0` to 1 rps (most restrictive — looked like "disable"
+    // but was actually "rate-limit to 1 req/s") and `maxInspectBytes: 0`
+    // silently disabled body inspection while overCap still applied. Both
+    // are almost always tenant typos, so we surface them at parse time.
+    if w.reputation.per_second == 0 {
+        return Err(
+            "reputation.perSecond must be > 0; use groups.reputation.enabled=false to disable"
+                .to_string(),
+        );
+    }
+    if w.body.max_inspect_bytes == 0 {
+        return Err(
+            "body.maxInspectBytes must be > 0; remove the field to use the default 1 MiB"
+                .to_string(),
+        );
+    }
     let mut cfg = core::Config {
         mode: w.mode,
         fail_mode: w.fail_mode.into(),
@@ -424,6 +445,68 @@ mod tests {
             err.contains("enabld"),
             "error should mention the bad key: {err}"
         );
+    }
+
+    // NEW-M5: typo coverage for body + reputation wire types.
+    #[test]
+    fn rejects_unknown_field_inside_body() {
+        let json = br#"{
+          "mode": "monitor",
+          "body": { "maxinspctbytes": 1024 }
+        }"#;
+        let err = parse(json).expect_err("unknown field inside body must error");
+        assert!(
+            err.contains("maxinspctbytes"),
+            "error should mention the bad key: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_reputation() {
+        let json = br#"{
+          "mode": "monitor",
+          "reputation": { "perSeocnd": 50 }
+        }"#;
+        let err = parse(json).expect_err("unknown field inside reputation must error");
+        assert!(
+            err.contains("perSeocnd"),
+            "error should mention the bad key: {err}"
+        );
+    }
+
+    // NEW-M6: empty-string bool is a typo, not a directive.
+    #[test]
+    fn rejects_empty_string_for_enabled_bool() {
+        let json = br#"{
+          "mode": "monitor",
+          "groups": { "injection": { "enabled": "" } }
+        }"#;
+        let err = parse(json).expect_err("empty boolean string must error");
+        assert!(
+            err.contains("invalid boolean string"),
+            "error should call out the bad value: {err}"
+        );
+    }
+
+    // NEW-M7: zero ranges are surfaced rather than silently coerced.
+    #[test]
+    fn rejects_per_second_zero() {
+        let json = br#"{
+          "mode": "enforce",
+          "reputation": { "perSecond": 0 }
+        }"#;
+        let err = parse(json).expect_err("perSecond=0 must error");
+        assert!(err.contains("perSecond"), "error: {err}");
+    }
+
+    #[test]
+    fn rejects_max_inspect_bytes_zero() {
+        let json = br#"{
+          "mode": "enforce",
+          "body": { "maxInspectBytes": 0, "overCap": "pass" }
+        }"#;
+        let err = parse(json).expect_err("maxInspectBytes=0 must error");
+        assert!(err.contains("maxInspectBytes"), "error: {err}");
     }
 
     /// Traefik serializes YAML booleans/integers to JSON STRINGS when
