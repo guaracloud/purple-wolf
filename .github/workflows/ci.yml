@@ -44,7 +44,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      # Pin to a version that handles CVSS 4.0 entries in the upstream
+      # RustSec advisory DB (e.g. RUSTSEC-2026-0076). Floating @v1 picks up
+      # the stale 0.x bundled cargo-deny which trips on the new CVSS schema.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: stable
 
   wasm-build:
     runs-on: ubuntu-latest
@@ -64,6 +69,11 @@ jobs:
 
   fuzz-smoke:
     runs-on: ubuntu-latest
+    # `rust-toolchain.toml` pins `channel = "stable"`, but cargo-fuzz needs
+    # nightly for `-Zsanitizer=address`. Override the pin via RUSTUP_TOOLCHAIN
+    # for the duration of the fuzz step so cargo-fuzz resolves nightly.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -72,7 +82,7 @@ jobs:
       - run: |
           cd fuzz
           for t in request_parser injection_inspect signatures_inspect policy_decide; do
-            cargo fuzz run "$t" -- -max_total_time=30
+            cargo +nightly fuzz run "$t" -- -max_total_time=30
           done
 
   coverage:
@@ -101,3 +111,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps
+
+  traefik-integration:
+    # End-to-end check: build the .wasm, spin Traefik v3 + a stub upstream
+    # via docker-compose, drive the attack matrix. Catches header-inspection
+    # regressions (v0.2 C-1) and any future plugin-loading breakage.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-wasip1 }
+      - name: Install wasi-sdk
+        run: |
+          curl -sSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-22/wasi-sdk-22.0-linux.tar.gz | tar xz -C /opt
+          echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> $GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release WASM
+        run: cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
+      - name: Run end-to-end suite (Traefik + plugin in Docker)
+        # The suite spawns docker-compose itself; we just need to enable
+        # the #[ignore]'d tests.
+        run: |
+          cargo test --manifest-path tests/traefik_integration/Cargo.toml \
+            -- --ignored --test-threads=1 --nocapture
+      - name: Dump Traefik logs on failure
+        if: failure()
+        run: |
+          cd tests/traefik_integration
+          docker compose logs traefik || true
+          docker compose down -v || true
