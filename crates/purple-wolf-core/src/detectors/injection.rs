@@ -121,4 +121,18 @@ mod tests {
         ));
         assert!(v.is_empty(), "benign cookie should not flag: {v:?}");
     }
+
+    /// Regression guard for NEW-I4: percent-encoded SQLi in a Cookie value
+    /// must still fire. Pre-fix the header was inspected raw only, so a
+    /// payload like `id=%27%20OR%201%3D1` reached libinjection as the
+    /// literal `%27...` string and never matched.
+    #[test]
+    fn flags_percent_encoded_sqli_in_cookie() {
+        let v =
+            InjectionDetector.inspect(&req_with_header("Cookie", "id=%27%20OR%20%271%27%3D%271"));
+        assert!(
+            v.iter().any(|x| x.rule == "sqli"),
+            "percent-encoded cookie SQLi must be inspected; verdicts: {v:?}"
+        );
+    }
 }

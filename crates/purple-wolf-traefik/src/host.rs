@@ -85,10 +85,21 @@ pub fn get_request_header_names() -> Vec<String> {
 }
 
 /// Value of a single request header by name (case-insensitive on the host
-/// side). Returns the first value if the header was sent multiple times.
+/// side). When the header was sent multiple times, all values are joined
+/// with `", "` per RFC 7230 §3.2.2; this matters for inspection because
+/// an attacker could otherwise hide a payload in the second of two
+/// duplicate headers (NEW-I3 in the followup review).
 pub fn get_request_header(name: &str) -> Option<String> {
     let values = header_values(KIND_REQUEST, name.as_bytes());
-    values.into_iter().next().map(bytes_to_string_lossy)
+    if values.is_empty() {
+        return None;
+    }
+    let joined = values
+        .into_iter()
+        .map(bytes_to_string_lossy)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(joined)
 }
 
 /// Read at most `max` bytes of the request body (truncates at the cap).

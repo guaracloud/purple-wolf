@@ -47,6 +47,12 @@ pub struct Request {
     pub body_inspected: bool,
     /// Source IP address, resolved from proxy headers or direct peer.
     pub source_ip: IpAddr,
+    /// Pre-computed values of inspection-allow-list headers. Each value
+    /// appears both raw and (if different) percent-decoded so encoded
+    /// payloads are inspected in both forms. Used by detectors via
+    /// [`Request::inspectable_fields`]; computed once at `build` time so
+    /// the per-detector hot path stays a borrow.
+    inspectable_headers: Vec<String>,
 }
 
 impl Request {
@@ -67,10 +73,11 @@ impl Request {
         let query_params = parse_query(raw_query);
         let header_bytes: usize = headers.iter().map(|(k, v)| k.len() + v.len()).sum();
         let body_text = String::from_utf8_lossy(&body).into_owned();
-        let headers = headers
+        let headers: Vec<(String, String)> = headers
             .into_iter()
             .map(|(k, v)| (k.to_ascii_lowercase(), v))
             .collect();
+        let inspectable_headers = build_inspectable_headers(&headers);
         let raw_query = if raw_query.is_empty() {
             None
         } else {
@@ -87,6 +94,7 @@ impl Request {
             body_text,
             body_inspected,
             source_ip,
+            inspectable_headers,
         }
     }
 
@@ -109,27 +117,17 @@ impl Request {
         if self.body_inspected {
             out.push(self.body_text.as_str());
         }
-        out.extend(self.inspectable_header_values());
+        out.extend(self.inspectable_headers.iter().map(String::as_str));
         out
     }
 
-    /// Values of headers in the inspection allow-list. Used internally by
-    /// [`Request::inspectable_fields`]; exposed so detectors that need to
-    /// distinguish header values from URL/body inputs (e.g. for severity
-    /// or detail formatting) can opt in.
-    ///
-    /// Header names are matched case-insensitively; `Request::build`
-    /// already lowercases stored header names, so a simple `==` /
-    /// `starts_with` is enough here.
-    pub fn inspectable_header_values(&self) -> Vec<&str> {
-        self.headers
-            .iter()
-            .filter(|(k, _)| {
-                INSPECTABLE_HEADERS_EXACT.contains(&k.as_str())
-                    || k.starts_with(INSPECTABLE_HEADER_PREFIX)
-            })
-            .map(|(_, v)| v.as_str())
-            .collect()
+    /// Values of headers in the inspection allow-list — both raw and
+    /// percent-decoded forms, deduplicated. Pre-computed at `build` time.
+    /// Detectors typically read these via [`Request::inspectable_fields`];
+    /// this accessor exists for callers that need to distinguish header
+    /// values from URL/body inputs (e.g. for severity or detail formatting).
+    pub fn inspectable_header_values(&self) -> &[String] {
+        &self.inspectable_headers
     }
 
     /// Look up a header by name. The lookup is case-insensitive regardless of
@@ -145,6 +143,31 @@ impl Request {
 /// Percent-decode once, lossily. Applied so encoded evasion payloads normalize.
 fn decode(s: &str) -> String {
     percent_decode_str(s).decode_utf8_lossy().into_owned()
+}
+
+/// Pre-compute the values of allow-listed headers in both raw and
+/// percent-decoded form. The result is stored on `Request` and reused by
+/// every detector via [`Request::inspectable_fields`].
+///
+/// The decoded form closes a percent-encoded bypass of the header
+/// inspection added in v0.2 C-1: without it, a payload like
+/// `Cookie: id=%27%20OR%20%271%27%3D%271` would reach libinjection as
+/// the literal `%27...` string and never match (NEW-I4 in the followup
+/// review). Storing both forms lets the detector hot path stay a borrow.
+fn build_inspectable_headers(headers: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (k, v) in headers {
+        if INSPECTABLE_HEADERS_EXACT.contains(&k.as_str())
+            || k.starts_with(INSPECTABLE_HEADER_PREFIX)
+        {
+            out.push(v.clone());
+            let decoded = decode(v);
+            if decoded != *v {
+                out.push(decoded);
+            }
+        }
+    }
+    out
 }
 
 fn parse_query(raw: &str) -> Vec<(String, String)> {
