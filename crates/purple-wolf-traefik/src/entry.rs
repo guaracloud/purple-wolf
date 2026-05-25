@@ -112,14 +112,7 @@ fn inspect() -> Action {
         // operators behind a trusted edge bump it to the number of trusted
         // proxies. See `purple_wolf_core::request::client_ip` for the
         // full trust-model docs.
-        let peer: IpAddr = host::get_source_addr()
-            .rsplit_once(':')
-            .map(|(h, _)| h)
-            .unwrap_or("")
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse()
-            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let peer = parse_peer(&host::get_source_addr());
         let source_ip = request::client_ip(&headers, peer, cfg.xff.trusted_hops);
 
         // URI split.
@@ -203,6 +196,114 @@ fn group_mode(cfg: &Config, g: Group) -> purple_wolf_core::config::GroupMode {
     }
 }
 
+/// Parse the host-provided source-address string into an `IpAddr`.
+///
+/// The http-wasm host conventionally passes `ip:port` for IPv4 and
+/// `[v6]:port` for IPv6, but neither the spec nor every wazero version
+/// guarantees that — bare `ip`, `[v6]`, and missing-port forms all
+/// appear in the wild. NEW-I5 in the followup review noted that the
+/// previous `rsplit_once(':')` collapsed bare `::1` to the unspecified
+/// IPv6 address, merging every distinct IPv6 peer to one rate-limit
+/// key.
+///
+/// Resolution order:
+///   1. Try parsing the whole string as a bare `IpAddr` (handles `::1`).
+///   2. Strip a trailing `:port` (rightmost colon) and retry — covers
+///      `1.2.3.4:5555` and the unbracketed-IPv6 odd case.
+///   3. Strip surrounding `[...]` and retry — covers `[::1]:5555` and
+///      bare `[::1]`.
+///   4. Fall back to `0.0.0.0` so the request still reaches detectors;
+///      the audit log will show the placeholder, signalling to the
+///      operator that source-IP attribution failed for this request.
+fn parse_peer(addr: &str) -> IpAddr {
+    let unspecified = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return unspecified;
+    }
+    // 1. Direct parse — handles bare IPv4 and bare IPv6.
+    if let Ok(ip) = addr.parse::<IpAddr>() {
+        return ip;
+    }
+    // 2. Strip ":port" (rightmost) and retry — handles `1.2.3.4:5555`
+    //    and any unbracketed-IPv6-with-port form some hosts emit.
+    if let Some((host, _)) = addr.rsplit_once(':') {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return ip;
+        }
+        // 3a. Strip brackets in case host = "[::1]".
+        let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
+        if let Ok(ip) = unbracketed.parse::<IpAddr>() {
+            return ip;
+        }
+    }
+    // 3b. Bare bracketed form `[::1]` with no port.
+    let unbracketed = addr.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = unbracketed.parse::<IpAddr>() {
+        return ip;
+    }
+    unspecified
+}
+
 /// http-wasm exported response hook (unused; we don't modify responses).
 #[no_mangle]
 pub extern "C" fn handle_response(_req_ctx: u32, _is_error: u32) {}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_peer;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn parses_ipv4_with_port() {
+        assert_eq!(
+            parse_peer("203.0.113.7:5555"),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))
+        );
+    }
+
+    #[test]
+    fn parses_bare_ipv4() {
+        assert_eq!(
+            parse_peer("203.0.113.7"),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))
+        );
+    }
+
+    #[test]
+    fn parses_bracketed_ipv6_with_port() {
+        assert_eq!(parse_peer("[::1]:8080"), IpAddr::V6(Ipv6Addr::LOCALHOST));
+    }
+
+    /// Regression guard for NEW-I5: pre-fix this collapsed to `::`
+    /// (unspecified IPv6) because `rsplit_once(':')` cut after the
+    /// final `:` in the address.
+    #[test]
+    fn parses_bare_ipv6() {
+        assert_eq!(parse_peer("::1"), IpAddr::V6(Ipv6Addr::LOCALHOST));
+        assert_eq!(
+            parse_peer("2001:db8::dead:beef"),
+            "2001:db8::dead:beef".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn parses_bare_bracketed_ipv6() {
+        assert_eq!(parse_peer("[::1]"), IpAddr::V6(Ipv6Addr::LOCALHOST));
+    }
+
+    #[test]
+    fn empty_falls_back_to_unspecified() {
+        assert_eq!(parse_peer(""), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(parse_peer("   "), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn garbage_falls_back_to_unspecified() {
+        assert_eq!(parse_peer("not-an-ip"), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(
+            parse_peer("not-an-ip:5555"),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+}
