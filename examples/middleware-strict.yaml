@@ -10,9 +10,17 @@ spec:
     purpleWolf:
       mode: enforce
       failMode: failOpen
-      body:
-        maxInspectBytes: 1048576
-        overCap: pass
+      # v0.3+: free-form labels echoed verbatim on every audit-log line
+      # produced by this Middleware. Use bounded dimensions (tenant,
+      # service, environment, region). NEVER put per-user or per-request
+      # values here — see docs/configuration.md "Labels: Cardinality
+      # warning". Keys: `^[a-z][a-z0-9_.-]{0,62}$`. Reserved prefix
+      # `purple_wolf.*` is dropped silently by the WAF.
+      labels:
+        tenant: acme
+        service: checkout-api
+        environment: prod
+        compliance: pci-dss
       groups:
         injection:  { enabled: true, mode: enforce }
         signatures: { enabled: true, mode: enforce }

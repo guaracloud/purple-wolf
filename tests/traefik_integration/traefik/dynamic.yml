@@ -22,6 +22,13 @@ http:
       plugin:
         purpleWolf:
           mode: enforce
+          # v0.3 labels: arbitrary key=value metadata echoed verbatim into
+          # every audit-log line for this Middleware. The audit-log
+          # assertion in end_to_end.rs reads these back.
+          labels:
+            tenant: acme
+            service: integration-test
+            environment: ci
           groups:
             injection:  { enabled: true,  mode: enforce }
             signatures: { enabled: true,  mode: enforce }
