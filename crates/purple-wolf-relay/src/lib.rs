@@ -14,7 +14,9 @@ pub mod envelope;
 pub mod metrics;
 pub mod parser;
 pub mod pipeline;
+pub mod signer;
 pub mod sources;
+pub mod subscribers;
 
 use std::sync::Arc;
 use tokio::sync::broadcast;
