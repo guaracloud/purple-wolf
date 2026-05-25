@@ -1,5 +1,76 @@
+# Hand-curated benign baseline. Every line MUST NOT trigger the
+# detection engine; CI fails on any FP. The larger statistical FP
+# baseline lives in tests/corpus/crs/ (recovered from CRS's own
+# no_expect_ids stages); see crates/purple-wolf-core/tests/crs_replay.rs.
+# Blank lines and `#`-prefixed lines are ignored.
+
+# ── Query strings (common shapes) ──────────────────────────────────────
 name=victor&page=2
 about
 search?q=cats and dogs
 ref=home
 hello world
+q=Rust 1.75 release notes
+q=docker compose
+q=how to deploy nginx behind cloudflare
+page=42&per_page=20&sort=created_at
+filter[status]=active&filter[role]=admin
+locale=en-US&timezone=Europe/London
+utm_source=newsletter&utm_medium=email&utm_campaign=launch_2026
+search=quick brown fox
+q=O(n log n) sorting
+q=size > 100 MB
+q=price < 99.99
+tag=rust,wasm,traefik
+date=2026-05-25
+year=2026&month=05
+hash=abc123def456
+checksum=sha256:abcdef0123456789
+
+# ── Email-shaped values ────────────────────────────────────────────────
+email=a@b.com
+email=victor.bona@hotmail.com
+email=admin+filter@example.org
+contact=hello@my-startup.io
+
+# ── URLs ───────────────────────────────────────────────────────────────
+url=https://github.com/guaracloud/purple-wolf
+ref=https://news.ycombinator.com/item?id=12345
+redirect_uri=https://app.example.com/callback?state=xyz
+homepage=https://en.wikipedia.org/wiki/Web_application_firewall
+
+# ── Tokens / IDs ───────────────────────────────────────────────────────
+id=00000000-0000-0000-0000-000000000000
+session_id=a1b2c3d4e5f6
+csrf_token=zXcVbNmAsDfGhJkL
+api_key=pk_test_4eC39HqLyjWDarjtT1zdp7dc
+trace_id=abc-123-def-456
+
+# ── Numbers / dates ────────────────────────────────────────────────────
+limit=100
+offset=0
+amount=42.50
+quantity=1
+created_at=2026-05-25T14:30:00Z
+
+# ── Common body-shaped content ─────────────────────────────────────────
+content=The quick brown fox jumps over the lazy dog.
+message=This is a longer message that talks about software design.
+note=Remember to check the cache invalidation step before deploy.
+description=A standard description with punctuation: commas, periods, semicolons; even colons.
+
+# ── JSON-y bodies ──────────────────────────────────────────────────────
+{"name":"victor","role":"admin"}
+{"items":[1,2,3],"total":3}
+{"settings":{"theme":"dark","lang":"en"}}
+
+# ── Multi-byte / accented text ─────────────────────────────────────────
+q=café français
+q=naïve résumé
+q=日本語のテスト
+q=Привет мир
+
+# ── Programming-content shapes (common to body inspection) ─────────────
+q=function add(a, b) { return a + b; }
+q=for i in range(10): print(i)
+q=SELECT name FROM users (this is text not a payload — context: blog post)
