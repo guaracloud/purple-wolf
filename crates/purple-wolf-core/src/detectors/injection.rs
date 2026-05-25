@@ -73,4 +73,52 @@ mod tests {
         let v = InjectionDetector.inspect(&req_with_query("name=victor&page=2"));
         assert!(v.is_empty());
     }
+
+    // ── Header inspection (fix for v0.2 C-1) ────────────────────────────────
+
+    fn req_with_header(name: &str, value: &str) -> Request {
+        Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![(name.into(), value.into())],
+            vec![],
+            false,
+            "1.2.3.4".parse::<IpAddr>().unwrap(),
+        )
+    }
+
+    #[test]
+    fn flags_sqli_in_cookie_header() {
+        let v = InjectionDetector.inspect(&req_with_header("Cookie", "id=1' OR '1'='1"));
+        assert!(v.iter().any(|x| x.rule == "sqli"), "verdicts: {v:?}");
+    }
+
+    #[test]
+    fn flags_sqli_in_referer_header() {
+        let v = InjectionDetector.inspect(&req_with_header("Referer", "http://x/?id=1' OR '1'='1"));
+        assert!(v.iter().any(|x| x.rule == "sqli"), "verdicts: {v:?}");
+    }
+
+    #[test]
+    fn flags_sqli_in_custom_x_header() {
+        let v = InjectionDetector.inspect(&req_with_header("X-User", "' OR 1=1 --"));
+        assert!(v.iter().any(|x| x.rule == "sqli"), "verdicts: {v:?}");
+    }
+
+    #[test]
+    fn flags_xss_in_referer_header() {
+        let v = InjectionDetector.inspect(&req_with_header("Referer", "<script>alert(1)</script>"));
+        assert!(v.iter().any(|x| x.rule == "xss"), "verdicts: {v:?}");
+    }
+
+    #[test]
+    fn benign_cookie_does_not_false_positive() {
+        let v = InjectionDetector.inspect(&req_with_header(
+            "Cookie",
+            "sessionid=abc123; csrftoken=xyz789",
+        ));
+        assert!(v.is_empty(), "benign cookie should not flag: {v:?}");
+    }
 }

@@ -47,11 +47,9 @@ impl Detector for SignatureDetector {
 
     fn inspect(&self, req: &Request) -> Vec<Verdict> {
         let mut verdicts = Vec::new();
-        // Scan path/params/body plus the User-Agent header.
-        let mut fields = req.inspectable_fields();
-        if let Some(ua) = req.header("user-agent") {
-            fields.push(ua);
-        }
+        // Header values (User-Agent, Cookie, Referer, X-*, etc.) are already
+        // part of `inspectable_fields()` per the allow-list in `request.rs`.
+        let fields = req.inspectable_fields();
         for field in fields {
             for m in self.matcher.find_iter(field) {
                 let (lit, rule, sev) = SIGNATURES[m.pattern().as_usize()];
@@ -123,5 +121,65 @@ mod tests {
             ip(),
         );
         assert!(SignatureDetector::new().inspect(&req).is_empty());
+    }
+
+    // ── Header inspection (fix for v0.2 C-1) ────────────────────────────────
+
+    #[test]
+    fn flags_lfi_signature_in_cookie() {
+        let req = Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![("Cookie".into(), "id=1; path=/etc/passwd".into())],
+            vec![],
+            false,
+            ip(),
+        );
+        let v = SignatureDetector::new().inspect(&req);
+        assert!(v.iter().any(|x| x.rule == "lfi"), "verdicts: {v:?}");
+    }
+
+    #[test]
+    fn flags_path_traversal_in_custom_x_header() {
+        let req = Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![("X-File-Path".into(), "../../etc/secret".into())],
+            vec![],
+            false,
+            ip(),
+        );
+        let v = SignatureDetector::new().inspect(&req);
+        assert!(
+            v.iter().any(|x| x.rule == "path_traversal"),
+            "verdicts: {v:?}"
+        );
+    }
+
+    #[test]
+    fn user_agent_still_detected_after_inspectable_field_consolidation() {
+        // Regression guard: the User-Agent special-case that signatures.rs
+        // used to apply was removed once Request::inspectable_fields() began
+        // returning header values via the allow-list. This test makes sure
+        // scanner-UA detection survives the refactor.
+        let req = Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            vec![("user-agent".into(), "sqlmap/1.7".into())],
+            vec![],
+            false,
+            ip(),
+        );
+        let v = SignatureDetector::new().inspect(&req);
+        assert!(v.iter().any(|x| x.rule == "scanner_ua"));
+        // And only once, because we no longer scan UA via both inspectable_fields
+        // AND a separate special-case loop.
+        assert_eq!(v.iter().filter(|x| x.rule == "scanner_ua").count(), 1);
     }
 }

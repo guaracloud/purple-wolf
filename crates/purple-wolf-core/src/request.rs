@@ -2,6 +2,27 @@
 use percent_encoding::percent_decode_str;
 use std::net::IpAddr;
 
+/// Headers whose values are inspected by the detection pipeline.
+///
+/// Two rules: (a) exact match against [`INSPECTABLE_HEADERS_EXACT`] (after
+/// case-fold to lowercase, which `Request::build` already applies), or (b)
+/// any header whose name starts with `x-` (the conventional prefix for
+/// custom application headers, a frequent injection vector).
+///
+/// The list is deliberately an allow-list rather than a deny-list: every
+/// header here is known to commonly carry user-controlled content that an
+/// attacker can use as an injection sink (cookies, the Referer URL, the
+/// Host header, raw Authorization payloads, the User-Agent string used by
+/// scanner-UA detection). Adding a header is a conservative decision —
+/// removing one is a detection regression.
+const INSPECTABLE_HEADERS_EXACT: &[&str] =
+    &["cookie", "referer", "host", "authorization", "user-agent"];
+
+/// Prefix matched by `inspectable_header_values` in addition to the exact
+/// allow-list — custom `X-*` headers are typically user-controllable and
+/// therefore inspected.
+const INSPECTABLE_HEADER_PREFIX: &str = "x-";
+
 /// A normalized, decoded view of one HTTP request. Detectors read this only.
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -74,7 +95,12 @@ impl Request {
         self.raw_query.as_deref()
     }
 
-    /// Every string a detector should scan: path, param values, body text.
+    /// Every string a detector should scan: path, param values, body text,
+    /// and the value of every inspectable header (see
+    /// [`INSPECTABLE_HEADERS_EXACT`]).
+    ///
+    /// Headers are appended last so the test/detector ordering stays stable
+    /// for path/query/body assertions.
     pub fn inspectable_fields(&self) -> Vec<&str> {
         let mut out = vec![self.path.as_str()];
         for (_, v) in &self.query_params {
@@ -83,7 +109,27 @@ impl Request {
         if self.body_inspected {
             out.push(self.body_text.as_str());
         }
+        out.extend(self.inspectable_header_values());
         out
+    }
+
+    /// Values of headers in the inspection allow-list. Used internally by
+    /// [`Request::inspectable_fields`]; exposed so detectors that need to
+    /// distinguish header values from URL/body inputs (e.g. for severity
+    /// or detail formatting) can opt in.
+    ///
+    /// Header names are matched case-insensitively; `Request::build`
+    /// already lowercases stored header names, so a simple `==` /
+    /// `starts_with` is enough here.
+    pub fn inspectable_header_values(&self) -> Vec<&str> {
+        self.headers
+            .iter()
+            .filter(|(k, _)| {
+                INSPECTABLE_HEADERS_EXACT.contains(&k.as_str())
+                    || k.starts_with(INSPECTABLE_HEADER_PREFIX)
+            })
+            .map(|(_, v)| v.as_str())
+            .collect()
     }
 
     /// Look up a header by name. The lookup is case-insensitive regardless of
@@ -233,6 +279,72 @@ mod tests {
             ip(),
         );
         assert_eq!(v.header("user-agent"), Some("curl"));
+    }
+
+    // ── Header inspection (fix for v0.2 C-1) ────────────────────────────────
+
+    #[test]
+    fn inspectable_fields_includes_allowlisted_header_values() {
+        let v = Request::build(
+            "GET",
+            "h",
+            "/p",
+            "q=1",
+            vec![
+                ("Cookie".into(), "sess=abc; id=42".into()),
+                ("Referer".into(), "https://x.example/from".into()),
+                ("Authorization".into(), "Bearer tok".into()),
+                ("X-User".into(), "victor".into()),
+                ("User-Agent".into(), "Mozilla/5.0".into()),
+                // Not in the allow-list — must NOT show up:
+                ("Accept-Language".into(), "en-US".into()),
+                ("Cache-Control".into(), "no-cache".into()),
+            ],
+            vec![],
+            false,
+            ip(),
+        );
+        let fields = v.inspectable_fields();
+        assert!(fields.contains(&"sess=abc; id=42"));
+        assert!(fields.contains(&"https://x.example/from"));
+        assert!(fields.contains(&"Bearer tok"));
+        assert!(fields.contains(&"victor"));
+        assert!(fields.contains(&"Mozilla/5.0"));
+        assert!(!fields.contains(&"en-US"));
+        assert!(!fields.contains(&"no-cache"));
+    }
+
+    #[test]
+    fn inspectable_header_values_matches_x_prefix_case_insensitively() {
+        let v = Request::build(
+            "GET",
+            "h",
+            "/",
+            "",
+            // The mixed-case name is lowercased by Request::build, so the
+            // prefix check sees `x-anything` regardless of caller casing.
+            vec![("X-Forwarded-For".into(), "1.2.3.4".into())],
+            vec![],
+            false,
+            ip(),
+        );
+        assert_eq!(v.inspectable_header_values(), vec!["1.2.3.4"]);
+    }
+
+    #[test]
+    fn header_inspection_preserves_existing_field_order() {
+        // path comes first, then query values, then body if inspected, then headers.
+        let v = Request::build(
+            "POST",
+            "h",
+            "/path",
+            "q=qv",
+            vec![("Cookie".into(), "ck".into())],
+            b"body".to_vec(),
+            true,
+            ip(),
+        );
+        assert_eq!(v.inspectable_fields(), vec!["/path", "qv", "body", "ck"]);
     }
 
     // ── client_ip tests ──────────────────────────────────────────────────────
