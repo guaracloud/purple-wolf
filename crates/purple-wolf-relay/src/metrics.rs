@@ -1,22 +1,36 @@
 //! Prometheus metrics surface.
 //!
-//! Task 9 lands a `Metrics` struct + `pwrelay_build_info` so the admin
-//! server's `/metrics` endpoint is reachable end-to-end. Task 21 grows
-//! the full metric family set (source / parser / enricher / delivery /
-//! DLQ); subsequent tasks bump individual counters as they wire their
-//! features in.
+//! Cardinality discipline: every label here is bounded by the
+//! operator's config (subscriber_id, enricher name, source_id from
+//! config), not by envelope content. Envelope label *values* are
+//! never used as metric labels — that's how a careless tenant
+//! taxonomy ends up exploding Prometheus storage.
 
-use prometheus::{Encoder, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
+use prometheus::{
+    Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    TextEncoder,
+};
 
-/// All metric handles. Cloneable Arc lets every pipeline task hold one.
+/// All metric handles. Hold this behind an `Arc` and share with every
+/// pipeline task that needs to record.
 pub struct Metrics {
-    registry: Registry,
-    /// `pwrelay_build_info{version,git_sha} = 1`. Build-time metadata
-    /// exposed as a gauge so dashboards can group by version.
+    pub registry: Registry,
     pub build_info: IntGaugeVec,
-    /// Toggles to 1 when the pipeline reports ready (Phase G Task 23
-    /// wires the toggler).
     pub ready: IntGauge,
+    /// Raw lines read from each source.
+    pub source_lines: IntCounterVec,
+    /// Parser outcomes: `ok` / `not_pw` / `error`.
+    pub parsed_events: IntCounterVec,
+    /// Enricher calls: `ok` / `error` / `timeout` per enricher name.
+    pub enricher_calls: IntCounterVec,
+    /// Per-subscriber: events matching the filter.
+    pub subscribers_matched: IntCounterVec,
+    /// Per-subscriber delivery outcomes.
+    pub deliveries: IntCounterVec,
+    /// Per-subscriber delivery latency in seconds.
+    pub delivery_latency_seconds: HistogramVec,
+    /// Per-subscriber DLQ depth gauge.
+    pub dlq_depth: IntGaugeVec,
 }
 
 impl Metrics {
@@ -30,8 +44,6 @@ impl Metrics {
             ),
             &["version", "git_sha"],
         )?;
-        // git_sha is sourced via build.rs in Phase I; for now report
-        // "unknown" so the metric is present and scrapable.
         let git_sha = option_env!("PURPLE_WOLF_RELAY_GIT_SHA").unwrap_or("unknown");
         build_info
             .with_label_values(&[env!("CARGO_PKG_VERSION"), git_sha])
@@ -44,10 +56,80 @@ impl Metrics {
         )?;
         registry.register(Box::new(ready.clone()))?;
 
+        let source_lines = IntCounterVec::new(
+            Opts::new(
+                "pwrelay_source_lines_total",
+                "Lines read from each configured source.",
+            ),
+            &["source_id"],
+        )?;
+        registry.register(Box::new(source_lines.clone()))?;
+
+        let parsed_events = IntCounterVec::new(
+            Opts::new(
+                "pwrelay_parsed_events_total",
+                "Parser outcomes by result class.",
+            ),
+            &["result"],
+        )?;
+        registry.register(Box::new(parsed_events.clone()))?;
+
+        let enricher_calls = IntCounterVec::new(
+            Opts::new(
+                "pwrelay_enricher_calls_total",
+                "Enricher invocations by name and outcome.",
+            ),
+            &["enricher", "result"],
+        )?;
+        registry.register(Box::new(enricher_calls.clone()))?;
+
+        let subscribers_matched = IntCounterVec::new(
+            Opts::new(
+                "pwrelay_subscribers_matched_total",
+                "Envelopes that matched each subscriber's filter.",
+            ),
+            &["subscriber_id"],
+        )?;
+        registry.register(Box::new(subscribers_matched.clone()))?;
+
+        let deliveries = IntCounterVec::new(
+            Opts::new(
+                "pwrelay_deliveries_total",
+                "Delivery outcomes per subscriber.",
+            ),
+            &["subscriber_id", "outcome"],
+        )?;
+        registry.register(Box::new(deliveries.clone()))?;
+
+        let delivery_latency_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "pwrelay_delivery_latency_seconds",
+                "End-to-end delivery latency (per attempt) seen by each subscriber.",
+            )
+            .buckets(vec![
+                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
+            &["subscriber_id"],
+        )?;
+        registry.register(Box::new(delivery_latency_seconds.clone()))?;
+
+        let dlq_depth = IntGaugeVec::new(
+            Opts::new("pwrelay_dlq_depth", "Current DLQ depth per subscriber."),
+            &["subscriber_id"],
+        )?;
+        registry.register(Box::new(dlq_depth.clone()))?;
+
         Ok(Self {
             registry,
             build_info,
             ready,
+            source_lines,
+            parsed_events,
+            enricher_calls,
+            subscribers_matched,
+            deliveries,
+            delivery_latency_seconds,
+            dlq_depth,
         })
     }
 
@@ -68,20 +150,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metrics_renders_build_info() {
+    fn metrics_renders_full_family_set() {
         let m = Metrics::new().unwrap();
-        let text = String::from_utf8(m.render()).unwrap();
-        assert!(
-            text.contains("pwrelay_build_info"),
-            "expected build_info in: {text}"
-        );
-    }
+        m.source_lines.with_label_values(&["stdin"]).inc();
+        m.parsed_events.with_label_values(&["ok"]).inc();
+        m.enricher_calls.with_label_values(&["lookup", "ok"]).inc();
+        m.subscribers_matched.with_label_values(&["s1"]).inc();
+        m.deliveries
+            .with_label_values(&["s1", "delivered"])
+            .inc_by(2);
+        m.delivery_latency_seconds
+            .with_label_values(&["s1"])
+            .observe(0.012);
+        m.dlq_depth.with_label_values(&["s1"]).set(5);
 
-    #[test]
-    fn metrics_renders_ready_zero_by_default() {
-        let m = Metrics::new().unwrap();
         let text = String::from_utf8(m.render()).unwrap();
-        // The metric is registered; value is 0 until pipeline flips it.
-        assert!(text.contains("pwrelay_ready"), "{text}");
+        for needle in [
+            "pwrelay_build_info",
+            "pwrelay_ready",
+            "pwrelay_source_lines_total",
+            "pwrelay_parsed_events_total",
+            "pwrelay_enricher_calls_total",
+            "pwrelay_subscribers_matched_total",
+            "pwrelay_deliveries_total",
+            "pwrelay_delivery_latency_seconds",
+            "pwrelay_dlq_depth",
+        ] {
+            assert!(
+                text.contains(needle),
+                "expected metric {needle} in output:\n{text}"
+            );
+        }
     }
 }

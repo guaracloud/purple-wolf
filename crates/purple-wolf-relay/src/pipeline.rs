@@ -53,13 +53,16 @@ pub async fn run(
     );
 
     // Build enrichers (Arc so they can be shared if multiple parser
-    // tasks ever exist; today there's just one).
+    // tasks ever exist; today there's just one). Names parallel the
+    // enrichers vec so metric labels stay aligned without a runtime
+    // lookup.
     let enrichers: Vec<_> = resolved
         .raw
         .enrichments
         .iter()
         .map(crate::enrichers::build)
         .collect();
+    let enricher_names: Vec<String> = enrichers.iter().map(|e| e.name().to_string()).collect();
 
     // Build subscribers: one per-subscriber mpsc + tokio task running
     // run_sink. Disabled subscribers are skipped — their slot doesn't
@@ -76,7 +79,7 @@ pub async fn run(
             .expect("validated config guarantees a secret per subscriber")
             .to_vec();
         let dlq = Arc::new(crate::subscribers::dlq::Dlq::new(1000));
-        let cfg: HttpSinkConfig = config_from(s, secret, dlq);
+        let cfg: HttpSinkConfig = config_from(s, secret, dlq, Some(metrics.clone()));
         let (tx, rx) = mpsc::channel::<Envelope>(subscriber_queue);
         let filter = CompiledFilter::compile(&s.filter);
         let id = cfg.id.clone();
@@ -121,33 +124,38 @@ pub async fn run(
     // Parser + enrich + fan-out loop. Single task today; trivial to
     // scale to N parser tasks if profiling ever points there.
     let parser_metrics = metrics.clone();
-    let parser_handle = tokio::spawn({
+    let parser_instance_id = instance_id.clone();
+    let mut parser_shutdown = shutdown.resubscribe();
+    let parser_handle = tokio::spawn(async move {
         let mut subs = subs;
-        let instance_id = instance_id.clone();
-        let enrichers = enrichers;
         let enricher_timeout = Duration::from_millis(500);
-        let mut shutdown_rx = shutdown.resubscribe();
-        async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown_rx.recv() => {
-                        tracing::info!("pipeline parser shutting down");
+        loop {
+            tokio::select! {
+                biased;
+                _ = parser_shutdown.recv() => {
+                    tracing::info!("pipeline parser shutting down");
+                    break;
+                }
+                msg = raw_rx.recv() => {
+                    let Some(raw) = msg else {
+                        tracing::info!("all sources closed; pipeline draining");
                         break;
-                    }
-                    msg = raw_rx.recv() => {
-                        let Some(raw) = msg else {
-                            tracing::info!("all sources closed; pipeline draining");
-                            break;
-                        };
-                        process_one(&raw, &enrichers, enricher_timeout, &instance_id, &mut subs, &parser_metrics).await;
-                    }
+                    };
+                    process_one(
+                        &raw,
+                        &enrichers,
+                        &enricher_names,
+                        enricher_timeout,
+                        &parser_instance_id,
+                        &mut subs,
+                        &parser_metrics,
+                    ).await;
                 }
             }
-            // Best-effort drop of sub.tx clones happens when the loop
-            // exits — sink tasks then drain or shut down on their own.
-            drop(subs);
         }
+        // Best-effort drop of sub.tx clones happens when the loop
+        // exits — sink tasks then drain or shut down on their own.
+        drop(subs);
     });
 
     // Wait for shutdown.
@@ -170,15 +178,28 @@ pub async fn run(
 async fn process_one(
     raw: &RawEvent,
     enrichers: &[Arc<dyn crate::enrichers::Enricher>],
+    enricher_names: &[String],
     enricher_timeout: Duration,
     instance_id: &str,
     subs: &mut [PerSubscriber],
-    _metrics: &Arc<Metrics>,
+    metrics: &Arc<Metrics>,
 ) {
+    metrics
+        .source_lines
+        .with_label_values(&[raw.source_id.as_str()])
+        .inc();
+
     let parsed = match parse_line(&raw.line) {
-        Ok(p) => p,
-        Err(ParseError::NotPurpleWolf) => return,
+        Ok(p) => {
+            metrics.parsed_events.with_label_values(&["ok"]).inc();
+            p
+        }
+        Err(ParseError::NotPurpleWolf) => {
+            metrics.parsed_events.with_label_values(&["not_pw"]).inc();
+            return;
+        }
         Err(e) => {
+            metrics.parsed_events.with_label_values(&["error"]).inc();
             tracing::warn!(error = %e, "parse error");
             return;
         }
@@ -191,8 +212,30 @@ async fn process_one(
     let labels = take_labels(&mut event);
 
     let mut labels = labels;
-    for enricher in enrichers {
-        enricher.enrich(&mut labels, enricher_timeout).await;
+    for (enricher, name) in enrichers.iter().zip(enricher_names.iter()) {
+        // Wrap each enricher call in tokio::time::timeout so a runaway
+        // enricher can't stall the parser task; the trait contract
+        // already says enrichers must not propagate failure, but the
+        // belt-and-braces timeout protects against a buggy enricher
+        // that ignores the contract.
+        let timed = tokio::time::timeout(
+            enricher_timeout * 2, // double the per-call budget so the inner timeout fires first
+            enricher.enrich(&mut labels, enricher_timeout),
+        )
+        .await;
+        match timed {
+            Ok(()) => metrics
+                .enricher_calls
+                .with_label_values(&[name.as_str(), "ok"])
+                .inc(),
+            Err(_) => {
+                metrics
+                    .enricher_calls
+                    .with_label_values(&[name.as_str(), "timeout"])
+                    .inc();
+                tracing::warn!(enricher = %name, "enricher exceeded outer-timeout");
+            }
+        }
     }
 
     let env = Envelope::new(
@@ -206,7 +249,14 @@ async fn process_one(
         labels,
     );
 
-    fan_out(&env, subs).await;
+    tracing::debug!(
+        event_id = %env.event_id,
+        labels = ?env.labels,
+        middleware = ?env.source.middleware,
+        "envelope built; fanning out"
+    );
+
+    fan_out(&env, subs, metrics).await;
 }
 
 /// Pull `labels` out of the parsed audit JSON into a `BTreeMap`.
@@ -235,16 +285,24 @@ struct PerSubscriber {
     sink_handle: tokio::task::JoinHandle<()>,
 }
 
-async fn fan_out(env: &Envelope, subs: &mut [PerSubscriber]) {
+async fn fan_out(env: &Envelope, subs: &mut [PerSubscriber], metrics: &Arc<Metrics>) {
     for sub in subs.iter_mut() {
         if !sub.filter.matches(env) {
             continue;
         }
+        metrics
+            .subscribers_matched
+            .with_label_values(&[sub.id.as_str()])
+            .inc();
         // Non-blocking try_send so a slow subscriber's full queue
         // can't backpressure the fan-out. Drop + count on full.
         match sub.tx.try_send(env.clone()) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                metrics
+                    .deliveries
+                    .with_label_values(&[sub.id.as_str(), "dropped_queue_full"])
+                    .inc();
                 tracing::warn!(
                     subscriber_id = %sub.id,
                     event_id = %env.event_id,
@@ -252,6 +310,10 @@ async fn fan_out(env: &Envelope, subs: &mut [PerSubscriber]) {
                 );
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                metrics
+                    .deliveries
+                    .with_label_values(&[sub.id.as_str(), "dropped_channel_closed"])
+                    .inc();
                 tracing::warn!(
                     subscriber_id = %sub.id,
                     event_id = %env.event_id,

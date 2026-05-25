@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::config::SubscriberConfig;
 use crate::envelope::Envelope;
+use crate::metrics::Metrics;
 use crate::signer::Signer;
 use crate::subscribers::dlq::Dlq;
 use crate::subscribers::retry::RetrySchedule;
@@ -46,6 +47,7 @@ pub struct HttpSinkConfig {
     pub max_attempts: u32,
     pub signer: Signer,
     pub dlq: Arc<Dlq>,
+    pub metrics: Option<Arc<Metrics>>,
 }
 
 /// Outcome of one delivery attempt, classified per the protocol spec.
@@ -111,6 +113,7 @@ async fn deliver_with_retries(
         let outcome = attempt_one(cfg, client, &env, attempt).await;
         match outcome {
             AttemptOutcome::Delivered => {
+                bump_outcome(cfg, "delivered");
                 tracing::info!(
                     subscriber = %cfg.id,
                     event_id = %env.event_id,
@@ -120,6 +123,8 @@ async fn deliver_with_retries(
                 return;
             }
             AttemptOutcome::PermanentFailure => {
+                bump_outcome(cfg, "dlq");
+                update_dlq_depth(cfg);
                 tracing::warn!(
                     subscriber = %cfg.id,
                     event_id = %env.event_id,
@@ -127,10 +132,12 @@ async fn deliver_with_retries(
                     "permanent failure; sending to DLQ"
                 );
                 cfg.dlq.push(env);
+                update_dlq_depth(cfg);
                 return;
             }
             AttemptOutcome::Retryable => {
                 if attempt >= cfg.max_attempts {
+                    bump_outcome(cfg, "dlq");
                     tracing::warn!(
                         subscriber = %cfg.id,
                         event_id = %env.event_id,
@@ -139,8 +146,10 @@ async fn deliver_with_retries(
                         "max_attempts exhausted; sending to DLQ"
                     );
                     cfg.dlq.push(env);
+                    update_dlq_depth(cfg);
                     return;
                 }
+                bump_outcome(cfg, "retry");
                 let delay = cfg.retry.next_delay(attempt);
                 tracing::warn!(
                     subscriber = %cfg.id,
@@ -154,6 +163,22 @@ async fn deliver_with_retries(
                 env = env.with_attempt(attempt);
             }
         }
+    }
+}
+
+fn bump_outcome(cfg: &HttpSinkConfig, outcome: &str) {
+    if let Some(m) = &cfg.metrics {
+        m.deliveries
+            .with_label_values(&[cfg.id.as_str(), outcome])
+            .inc();
+    }
+}
+
+fn update_dlq_depth(cfg: &HttpSinkConfig) {
+    if let Some(m) = &cfg.metrics {
+        m.dlq_depth
+            .with_label_values(&[cfg.id.as_str()])
+            .set(cfg.dlq.len() as i64);
     }
 }
 
@@ -189,7 +214,8 @@ async fn attempt_one(
         .header("x-purplewolf-signature", signature)
         .body(body);
 
-    match req.send().await {
+    let start = std::time::Instant::now();
+    let result = match req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             classify_status(status)
@@ -215,14 +241,26 @@ async fn attempt_one(
             }
             AttemptOutcome::Retryable
         }
+    };
+    if let Some(m) = &cfg.metrics {
+        let elapsed = start.elapsed().as_secs_f64();
+        m.delivery_latency_seconds
+            .with_label_values(&[cfg.id.as_str()])
+            .observe(elapsed);
     }
+    result
 }
 
 /// Construct the static parts of an `HttpSinkConfig` from a
 /// `SubscriberConfig` + the resolved secret. The DLQ is supplied by
 /// the caller so the admin server can hold a strong reference for
 /// inspection.
-pub fn config_from(s: &SubscriberConfig, secret: Vec<u8>, dlq: Arc<Dlq>) -> HttpSinkConfig {
+pub fn config_from(
+    s: &SubscriberConfig,
+    secret: Vec<u8>,
+    dlq: Arc<Dlq>,
+    metrics: Option<Arc<Metrics>>,
+) -> HttpSinkConfig {
     HttpSinkConfig {
         id: s.id.clone(),
         url: s.url.clone(),
@@ -231,6 +269,7 @@ pub fn config_from(s: &SubscriberConfig, secret: Vec<u8>, dlq: Arc<Dlq>) -> Http
         max_attempts: s.retry.max_attempts,
         signer: Signer::new(secret),
         dlq,
+        metrics,
     }
 }
 
@@ -269,6 +308,7 @@ mod tests {
             max_attempts,
             signer: Signer::new(b"test-secret".to_vec()),
             dlq: Arc::new(Dlq::new(16)),
+            metrics: None,
         }
     }
 
@@ -442,6 +482,7 @@ mod tests {
             max_attempts: 5,
             signer: Signer::new(b"test-secret".to_vec()),
             dlq: Arc::new(Dlq::new(16)),
+            metrics: None,
         };
         let (tx, rx) = mpsc::channel(8);
         let (_sd_tx, sd_rx) = broadcast::channel::<()>(1);
