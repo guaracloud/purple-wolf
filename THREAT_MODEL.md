@@ -1,0 +1,218 @@
+# Threat Model — purple-wolf v0.2
+
+This document is the source of truth for what purple-wolf is and is not
+designed to protect against. Adopters should read it before deploying;
+auditors should diff it against any future PR that changes detector
+behavior.
+
+The model is intentionally narrow. A WAF that promises more than it
+delivers is worse than no WAF — operators wire their alerting around
+the promise and discover the gap during an incident.
+
+---
+
+## 1. Trust boundaries
+
+```
+   public internet
+        │
+   ┌────▼────┐
+   │ trusted │  (your CDN / ALB / Cloudflare / etc. — operator-owned)
+   │  edge   │
+   └────┬────┘
+        │
+   ┌────▼─────────────────────────────────────────────────┐
+   │ Traefik HA (platform-managed)                         │
+   │  ├─ TLS termination, routing, rate-limit, retries     │
+   │  └─ http-wasm plugin host (wazero)                    │
+   │      └─ purple-wolf-traefik (this project)            │
+   │          └─ purple-wolf-core (the detection engine)   │
+   └────┬─────────────────────────────────────────────────┘
+        │
+   ┌────▼────┐
+   │ tenant   │ (the application being protected)
+   │ backend  │
+   └─────────┘
+```
+
+The plugin runs inside Traefik's wazero sandbox. From the engine's
+perspective:
+
+- **Untrusted:** every byte of the HTTP request — method, URI, every
+  header value, body up to `body.maxInspectBytes`. We assume an
+  attacker controls all of these.
+- **Trusted-by-config:** the `X-Forwarded-For` chain. By default the
+  engine ignores it entirely (`xff.trustedHops: 0`) and uses the TCP
+  peer as the source IP. Operators opt in to trusting N rightmost
+  XFF entries via `xff.trustedHops: N`; misconfiguring this is a
+  self-DoS primitive (see §4.1).
+- **Trusted:** the Middleware config bytes the host hands the plugin
+  via the http-wasm `get_config` import. If an attacker can write
+  arbitrary Middleware YAML in the cluster, they are already past the
+  WAF and can simply disable it.
+- **Trusted:** the Traefik host process. The plugin runs inside its
+  address space (sandboxed by wazero), but a compromised Traefik can
+  bypass the plugin trivially by just not calling it.
+
+---
+
+## 2. In scope (what purple-wolf v0.2 is designed to catch)
+
+| Attack class | Detector | Notes |
+|---|---|---|
+| SQL injection in URL/query | `injection` (libinjection) | Context-aware tokenizer |
+| SQL injection in request body | `injection` | Raw bytes; non-UTF-8 safe |
+| SQL injection in headers (Cookie, Referer, X-*, Host, Authorization, User-Agent) | `injection` | Both raw and percent-decoded |
+| XSS in URL/query | `injection` (libinjection) | HTML5 tokenizer |
+| XSS in request body | `injection` | |
+| XSS in allow-listed headers | `injection` | |
+| Path traversal (`../`, `..\\`, `....//`, `/etc/passwd`) | `signatures` | Literal aho-corasick |
+| RCE primitives (`$(`, `` ` ``, `/bin/sh`) | `signatures` | Literal — narrow |
+| Scanner User-Agents (sqlmap, nikto, nuclei) | `signatures` | Case-insensitive |
+| Method allow-list (anything outside GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS) | `structural` | Defense in depth — Traefik usually rejects upstream |
+| Oversized header size / count | `structural` | 16 KiB / 100 headers |
+| Per-IP rate limiting | `reputation` | Bounded LRU token bucket |
+| Per-IP deny list | `reputation` | Operator-supplied list |
+
+---
+
+## 3. Out of scope (explicit non-goals)
+
+### 3.1 Non-goals at the architectural level
+
+- **TLS termination, certificate management, routing decisions.**
+  Traefik owns these. The plugin runs after Traefik has decided
+  routing and TLS is terminated.
+- **Cluster-wide shared rate-limit state.** Rate-limit state lives in
+  WASM linear memory per plugin instance per Traefik pod; effective
+  cluster rate is `configured × pod_count`. A shared-state backend
+  (Redis-backed governor) is a v0.3+ feature.
+- **Streaming body inspection.** The plugin reads up to
+  `body.maxInspectBytes` (default 1 MiB) into WASM memory. Larger
+  bodies are either passed (`overCap: pass`, the default — see §4.2)
+  or blocked (`overCap: block`). True streaming requires a different
+  http-wasm host capability we don't have.
+- **Stateful detection across requests.** Each request is inspected
+  independently. Pattern-based "scanner X probed 12 endpoints in the
+  last minute → escalate" is out of scope; rely on Loki / Promtail
+  derived metrics from the audit-log fields.
+- **Application-level authorization.** The WAF blocks payloads; it
+  does not understand "this user is allowed to read this resource".
+
+### 3.2 Non-goals at the detection level
+
+- **OWASP CRS rule parity.** purple-wolf is hybrid by design
+  (libinjection context-aware tokenizer + literal signatures +
+  structural). The CRS regression suite measures at ~22% honest
+  detection (XSS 45%, SQLi 18%; see `tests/crs_replay.rs`) because
+  CRS exercises atomic-token tests (bare `INFORMATION_SCHEMA`,
+  `OR 1=1` without quotes) that libinjection deliberately won't flag
+  in isolation.
+- **Template injection (`{{7*7}}`, `{%`).** No detector ships for
+  Jinja/Twig/ERB-style SSTI. Future work.
+- **SSRF (`http://169.254.169.254/`, `gopher://`, `file://`).** No
+  cloud-metadata or scheme-based signature ships. Future work.
+- **NoSQL injection (`$where`, `$ne`).** Not covered. Future work.
+- **Prototype pollution (`__proto__`, `constructor.prototype`).** Not
+  covered. Future work.
+- **Log4Shell-style RCE (`${jndi:...}`).** No specific signature.
+  Future work.
+- **CRLF injection / HTTP request smuggling.** Mostly out of the
+  plugin's hands — Traefik filters CRLF before the plugin sees the
+  request, and HTTP/2 doesn't carry CRLF at all. The plugin won't
+  detect a smuggling attempt that already made it past Traefik.
+- **Tenant-customizable signature lists.** The signature table in
+  `crates/purple-wolf-core/src/detectors/signatures.rs` is
+  compile-time. A tenant cannot add a custom literal without forking
+  and recompiling. Future work.
+
+### 3.3 Non-goals at the integrity level
+
+- **Validation of the plugin binary itself.** Cosign keyless
+  signatures are produced at release time (see `release.yml`) and
+  consumers SHOULD verify them, but we don't ship a runtime self-check.
+  A compromised release artifact mounted into Traefik is by
+  construction undetectable from inside the plugin.
+- **Side-channel resistance.** A timing oracle on libinjection's
+  worst-case input is in principle observable; we don't make
+  cryptographic timing claims.
+
+---
+
+## 4. Known operational hazards
+
+These are not "bugs" — they are documented behaviors a careful
+operator should understand.
+
+### 4.1 Self-DoS via misconfigured `xff.trustedHops`
+
+If you set `xff.trustedHops` higher than your actual trusted-proxy
+count, attackers can spoof the leftmost XFF entry and:
+- pin the per-IP rate-limit budget for an arbitrary IP (impersonation
+  DoS against a victim); or
+- rotate spoofed IPs to inflate the rate-limit map's memory footprint
+  (bounded at `reputation.maxTrackedIps`, default 50,000 — bounded
+  DoS but real load).
+
+**Mitigation:** default `xff.trustedHops` is `0` (use TCP peer, ignore
+XFF). Only opt in to the count of *actually trusted* proxies between
+your wasm guest and the public internet. Also configure Traefik's own
+`entryPoints.<name>.forwardedHeaders.trustedIPs` so it strips
+untrusted XFF before the plugin sees the request.
+
+### 4.2 `body.overCap: pass` is a body-bypass tradeoff
+
+The default `overCap: pass` lets requests with bodies larger than
+`maxInspectBytes` through without body inspection (URL and header
+inspection still run). Attackers who learn this and prepend 1 MiB of
+padding can defeat body-only payload detection.
+
+**Mitigation:** raise `maxInspectBytes` (memory cost) or switch to
+`overCap: block` (correctness cost — any legitimate large upload
+returns 403).
+
+### 4.3 Fail-open paths are unmetered
+
+Two paths fail open silently today:
+- libinjection returning `ERROR = -1` (`crates/purple-wolf-core/src/ffi.rs:23,33`).
+  In practice libinjection's API never returns -1 for `is_sqli`; the
+  XSS path can in pathological inputs. Both treat -1 as benign.
+- A detector panic caught by `catch_unwind` in
+  `crates/purple-wolf-traefik/src/entry.rs:73` applies
+  `failMode: failOpen` (default).
+
+Operators cannot tell from metrics how much traffic is bypassing
+detection via these paths. Future work: emit a `soft_failure: true`
+field on the audit log when either fires.
+
+### 4.4 Detector order vs. severity in the audit log
+
+Pre-NEW-H1 the audit-log `blocked_rule` named whichever enforced
+verdict fired first. Post-fix, the highest-severity enforced verdict
+wins; on ties, the first detector in `Injection → Signatures →
+Structural → Reputation` order wins. The `would_block_rules` array
+preserves the rest, so no detection is lost.
+
+---
+
+## 5. What to monitor in production
+
+- `action: "block"` count, per `blocked_rule` — your true positives + FPs.
+- `action: "allow"` count with non-empty `would_block_rules` — monitor-mode
+  signal; use to tune before flipping to enforce.
+- Plugin failure rate from Traefik's metrics
+  (`traefik_middleware_request_total{code="500"}`) — should be near zero;
+  spikes indicate detector panics caught by `catch_unwind`.
+- `source_ip` cardinality from the audit log — sudden growth into the
+  cap (50k entries by default) indicates IP-rotation DoS attempts.
+- `body.overCap` 403s — see §4.2.
+
+---
+
+## 6. Reporting issues
+
+See [SECURITY.md](SECURITY.md) for the private disclosure channel.
+This document is updated on every change to detection scope or trust
+boundary; any PR that touches `crates/purple-wolf-core/src/detectors/`,
+`request.rs::client_ip`, or `config.rs::XffConfig` should also update
+the relevant section here.
