@@ -10,7 +10,12 @@ exclude = ["fuzz", "tests/relay_integration", "tests/traefik_integration"]
 [workspace.package]
 version = "0.3.0-dev"
 edition = "2021"
-rust-version = "1.75"
+# v0.3 bumps MSRV from 1.75 to 1.88. The relay's dep tree pulls in
+# icu_* / idna (via reqwest's URL stack) which require 1.86, and
+# wiremock 0.6.5 (a dev-dep) uses let-chains which only stabilized
+# in 1.88. 1.88 is the floor that resolves cleanly across runtime
+# AND test compiles.
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/guaracloud/purple-wolf"
 homepage   = "https://github.com/guaracloud/purple-wolf"
@@ -21,6 +26,10 @@ serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 aho-corasick = "1"
 percent-encoding = "2"
+# Workspace-level path+version pin for the core crate. Member
+# manifests reference this via `purple-wolf-core.workspace = true`,
+# so a `cargo release` bump propagates atomically.
+purple-wolf-core = { path = "crates/purple-wolf-core", version = "0.3.0-dev" }
 
 # Size-optimised release for the WASM plugin artifact.
 [profile.release]
