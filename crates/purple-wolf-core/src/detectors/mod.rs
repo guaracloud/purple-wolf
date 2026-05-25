@@ -37,7 +37,12 @@ impl Group {
 }
 
 /// Verdict severity for downstream filtering in audit logs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The variant order is meaningful: `Low < Medium < High < Critical`. The
+/// derived `PartialOrd`/`Ord` lets `policy::decide` pick the highest-severity
+/// blocking verdict so the audit-log `blocked_rule` always names the worst
+/// thing the request did, not the first thing a detector happened to find.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     // No detector currently emits Low, but it's part of the severity ladder —
     // future signatures (e.g. minor scanner UA hits) will need it. Kept on
