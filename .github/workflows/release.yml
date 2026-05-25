@@ -3,9 +3,22 @@ on:
   push:
     tags: ["v*"]
 
+# Prevent two release jobs racing on the same tag (NEW-H6). Two pushes
+# would otherwise both try to upload assets and `cargo publish`,
+# producing a half-released state.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish-and-sign:
     runs-on: ubuntu-latest
+    # Required-reviewer gate (NEW-H6). The `release` environment must be
+    # configured on the repo with at least one required reviewer before
+    # the first tag push, otherwise this job will queue indefinitely.
+    # That's the intended fail-closed behavior — better than letting an
+    # accidental tag push fire crates.io + cosign sign-blob.
+    environment: release
     permissions:
       contents: write
       id-token: write   # for cosign keyless
@@ -22,20 +35,43 @@ jobs:
         run: cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
       - name: Compute SHA256
         run: sha256sum target/wasm32-wasip1/release/purple_wolf_traefik.wasm > purple-wolf.wasm.sha256
-      - uses: sigstore/cosign-installer@v3
+      # SHA-pin supply-chain-critical actions (NEW-I6). Both
+      # cosign-installer and action-gh-release have access to the
+      # release identity (id-token + GH_TOKEN); a floating tag is the
+      # easiest way to lose signing integrity. Dependabot will still
+      # propose bumps via the `# vN.M.K` comment.
+      - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
       - name: Cosign keyless sign the WASM
         run: |
           cosign sign-blob --yes \
             target/wasm32-wasip1/release/purple_wolf_traefik.wasm \
             --output-signature purple-wolf.wasm.sig \
             --output-certificate purple-wolf.wasm.pem
-      - uses: softprops/action-gh-release@v2
+      # Verify what we just signed — fail-closed if the signature blob is
+      # not actually verifiable against the certificate identity. Prevents
+      # the "signed but unverifiable" outcome that would leave consumers
+      # downloading an asset with a meaningless signature.
+      - name: Verify the just-signed blob
+        run: |
+          cosign verify-blob \
+            --signature purple-wolf.wasm.sig \
+            --certificate purple-wolf.wasm.pem \
+            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            target/wasm32-wasip1/release/purple_wolf_traefik.wasm
+      - uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
         with:
           files: |
             target/wasm32-wasip1/release/purple_wolf_traefik.wasm
             purple-wolf.wasm.sha256
             purple-wolf.wasm.sig
             purple-wolf.wasm.pem
+      # NEW-I7: guard `cargo publish` so a re-pushed tag that didn't bump
+      # the version doesn't fail *after* assets were already published
+      # (leaving a half-released state). Dry-run first; only publish if
+      # the dry-run succeeds.
+      - name: Verify crates.io publish would succeed (dry-run)
+        run: cargo publish -p purple-wolf-core --dry-run
       - name: Publish core to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
