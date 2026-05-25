@@ -5,6 +5,9 @@
 /fuzz/target
 /tests/traefik_integration/target
 /tests/traefik_integration/Cargo.lock
+/tests/relay_integration/target
+/tests/relay_integration/Cargo.lock
+/tests/relay_integration/shared
 **/*.rs.bk
 *.pdb
 
