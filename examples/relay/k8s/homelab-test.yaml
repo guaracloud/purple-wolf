@@ -248,9 +248,16 @@ spec:
       # container creates first.
       securityContext:
         fsGroup: 65532
+      # Per-pod auth overrides the homelab's node-level GHCR
+      # registries.yaml (which still has the placeholder PAT for
+      # vicotrbb that lacks org access). The Secret is created
+      # out-of-band from `gh auth token` — see
+      # documentation/homelab-purple-wolf-test.md.
+      imagePullSecrets:
+        - name: ghcr-pull
       initContainers:
         - name: stage-plugin
-          image: ghcr.io/vicotrbb/purple-wolf-wasm:main
+          image: ghcr.io/guaracloud/purple-wolf-wasm:main
           imagePullPolicy: Always
           # The wasm image is busybox-based (see crates/purple-wolf-
           # traefik/Dockerfile.wasm) so `cp` is available.
@@ -305,7 +312,7 @@ spec:
             limits: { memory: 256Mi }
 
         - name: relay
-          image: ghcr.io/vicotrbb/purple-wolf-relay:main
+          image: ghcr.io/guaracloud/purple-wolf-relay:main
           imagePullPolicy: Always
           args:
             - "--config=/etc/relay/relay.yaml"

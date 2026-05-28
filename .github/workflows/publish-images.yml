@@ -20,12 +20,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  # Dev-channel images live under vicotrbb/* (the operator's personal
-  # GHCR namespace) so the homelab's existing GHCR PAT can pull them
-  # without needing org-package authorization. Release-tagged stable
-  # images still go under guaracloud/* via release.yml.
-  IMAGE_RELAY: ghcr.io/vicotrbb/purple-wolf-relay
-  IMAGE_WASM: ghcr.io/vicotrbb/purple-wolf-wasm
+  IMAGE_RELAY: ghcr.io/guaracloud/purple-wolf-relay
+  IMAGE_WASM: ghcr.io/guaracloud/purple-wolf-wasm
 
 jobs:
   wasm-image:
