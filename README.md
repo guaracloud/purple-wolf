@@ -83,7 +83,10 @@ For the full per-field configuration reference, see
 [`docs/configuration.md`](docs/configuration.md). For a runnable
 end-to-end smoke test on a real Kubernetes cluster (WAF + relay +
 webhook subscriber in one Pod), see
-[`docs/homelab-test.md`](docs/homelab-test.md).
+[`docs/homelab-test.md`](docs/homelab-test.md). For a head-to-head
+benchmark against [Coraza](https://coraza.io/) on identical Kubernetes
+topology (throughput, latency, resource usage, security efficacy),
+see [`docs/benchmark.md`](docs/benchmark.md).
 
 ## Building and testing
 

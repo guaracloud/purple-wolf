@@ -1,0 +1,365 @@
+# WAF benchmark topology: purple-wolf v0.3 vs Coraza http-wasm v0.3.0,
+# both as Traefik plugins, side-by-side.
+#
+# Goal: same backend, same Traefik version, same node, same resource
+# budget — only the .wasm differs.
+#
+# Apply with:
+#   # one-time prerequisite (same as homelab-test):
+#   kubectl create namespace waf-bench
+#   kubectl -n waf-bench create secret docker-registry ghcr-pull \
+#       --docker-server=ghcr.io --docker-username=vicotrbb \
+#       --docker-password="$(gh auth token)"
+#   kubectl apply -f benchmarks/k8s/waf-bench.yaml
+#
+# Teardown:
+#   kubectl delete namespace waf-bench
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: waf-bench
+  labels:
+    purpose: benchmark
+
+# ─────────────────────────────────────────────────────────────────────
+# Plugin manifests (loaded into Traefik's localPlugins). Both WAFs
+# get a sibling `.traefik.yml` so Traefik treats them identically.
+# ─────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pw-plugin-manifest
+  namespace: waf-bench
+data:
+  .traefik.yml: |
+    displayName: purple-wolf
+    type: middleware
+    runtime: wasm
+    import: github.com/guaracloud/purple-wolf
+    summary: purple-wolf WAF — benchmark instance
+    testData:
+      mode: monitor
+      groups:
+        injection: { enabled: true, mode: monitor }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coraza-plugin-manifest
+  namespace: waf-bench
+data:
+  .traefik.yml: |
+    displayName: coraza
+    type: middleware
+    runtime: wasm
+    import: github.com/jcchavezs/coraza-http-wasm-traefik
+    summary: Coraza http-wasm WAF — benchmark instance
+    testData:
+      directives:
+        - SecRuleEngine On
+
+# ─────────────────────────────────────────────────────────────────────
+# Traefik configs for each deployment.
+# Both write access logs in JSON to stdout (no audit-line emission
+# from purple-wolf is captured for this benchmark — we're measuring
+# throughput/latency/CPU/RSS, not delivery).
+# ─────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pw-traefik-config
+  namespace: waf-bench
+data:
+  traefik.yml: |
+    entryPoints:
+      web:
+        address: ":8080"
+    providers:
+      file:
+        filename: /etc/traefik/dynamic.yml
+        watch: false
+    experimental:
+      localPlugins:
+        purpleWolf:
+          moduleName: github.com/guaracloud/purple-wolf
+    log:
+      level: WARN
+  dynamic.yml: |
+    http:
+      routers:
+        bench:
+          rule: "PathPrefix(`/`)"
+          entryPoints: [web]
+          service: whoami
+          middlewares: [waf]
+      services:
+        whoami:
+          loadBalancer:
+            servers:
+              - url: "http://localhost:8000"
+      middlewares:
+        waf:
+          plugin:
+            purpleWolf:
+              mode: enforce
+              # Same labels as homelab-test for symmetry, but no relay
+              # is consuming them here.
+              labels:
+                tenant: bench
+                service: waf-bench
+                environment: homelab
+              groups:
+                injection:  { enabled: true, mode: enforce }
+                signatures: { enabled: true, mode: enforce }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coraza-traefik-config
+  namespace: waf-bench
+data:
+  traefik.yml: |
+    entryPoints:
+      web:
+        address: ":8080"
+    providers:
+      file:
+        filename: /etc/traefik/dynamic.yml
+        watch: false
+    experimental:
+      localPlugins:
+        coraza:
+          moduleName: github.com/jcchavezs/coraza-http-wasm-traefik
+    log:
+      level: WARN
+  # Coraza directives are inlined here. The set targets the same
+  # detection classes purple-wolf covers at "enforce" — SQLi, XSS,
+  # scanner UAs, RCE primitives, path traversal — using Coraza's
+  # native operators (the same ones OWASP CRS calls into at
+  # Paranoia Level 1). Documented honestly in docs/benchmark.md.
+  dynamic.yml: |
+    http:
+      routers:
+        bench:
+          rule: "PathPrefix(`/`)"
+          entryPoints: [web]
+          service: whoami
+          middlewares: [waf]
+      services:
+        whoami:
+          loadBalancer:
+            servers:
+              - url: "http://localhost:8000"
+      middlewares:
+        waf:
+          plugin:
+            coraza:
+              # Single-quoted YAML strings: backslashes are literal,
+              # internal single quotes escaped as ''. This is the
+              # simplest form that survives YAML → ModSec arg parsing
+              # → regex compile without double-escaping.
+              directives:
+                - SecRuleEngine On
+                - SecRequestBodyAccess On
+                - SecRequestBodyLimit 1048576
+                - SecResponseBodyAccess Off
+                - 'SecRule ARGS|ARGS_NAMES|REQUEST_HEADERS:Cookie|REQUEST_HEADERS:Referer "@detectSQLi" "id:1001,phase:2,t:none,t:utf8toUnicode,t:urlDecodeUni,t:removeNulls,log,deny,status:403,msg:''SQLi''"'
+                - 'SecRule ARGS|ARGS_NAMES|REQUEST_HEADERS:Cookie|REQUEST_HEADERS:Referer "@detectXSS" "id:1002,phase:2,t:none,t:utf8toUnicode,t:urlDecodeUni,t:htmlEntityDecode,t:jsDecode,t:cssDecode,t:removeNulls,log,deny,status:403,msg:''XSS''"'
+                - 'SecRule REQUEST_HEADERS:User-Agent "@pm sqlmap nikto nmap masscan grabber nuclei wpscan dirbuster" "id:1003,phase:1,t:lowercase,log,deny,status:403,msg:''scanner UA''"'
+                - 'SecRule REQUEST_URI|ARGS "@rx (?i)(?:\.\./|/etc/passwd|/etc/shadow)" "id:1004,phase:2,t:none,t:urlDecodeUni,log,deny,status:403,msg:''path traversal''"'
+                - 'SecRule REQUEST_METHOD "!@within GET POST PUT PATCH DELETE HEAD OPTIONS" "id:1006,phase:1,log,deny,status:403,msg:''method not allowed''"'
+
+# ─────────────────────────────────────────────────────────────────────
+# Asset-staging initContainer scripts.
+# Each WAF pod's initContainer downloads + extracts its plugin wasm.
+# ─────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coraza-stage-script
+  namespace: waf-bench
+data:
+  stage.sh: |
+    #!/bin/sh
+    set -eu
+    # Download Coraza http-wasm v0.3.0 from GitHub Releases.
+    URL="https://github.com/jcchavezs/coraza-http-wasm/releases/download/v0.3.0/coraza-http-wasm-v0.3.0.zip"
+    cd /tmp
+    wget -q -O coraza.zip "$URL"
+    unzip -o coraza.zip
+    cp coraza-http-wasm.wasm /plugin/plugin.wasm
+    cp /manifest/.traefik.yml /plugin/.traefik.yml
+    ls -la /plugin
+
+# ─────────────────────────────────────────────────────────────────────
+# Deployments — purple-wolf and Coraza, side by side, same node, same
+# resource budget on the Traefik container.
+# ─────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-pw
+  namespace: waf-bench
+  labels: { app.kubernetes.io/name: bench-pw, waf: purple-wolf }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: bench-pw }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: bench-pw, waf: purple-wolf }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: homelab-01
+      imagePullSecrets:
+        - name: ghcr-pull
+      initContainers:
+        - name: stage-plugin
+          image: ghcr.io/guaracloud/purple-wolf-wasm:main
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cp /purple_wolf_traefik.wasm /plugin/plugin.wasm
+              cp /manifest/.traefik.yml /plugin/.traefik.yml
+              ls -la /plugin
+          volumeMounts:
+            - { name: plugin, mountPath: /plugin }
+            - { name: manifest, mountPath: /manifest, readOnly: true }
+      containers:
+        - name: whoami
+          image: docker.io/traefik/whoami:v1.10
+          args: ["--port", "8000"]
+          ports: [{ containerPort: 8000, name: whoami }]
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+        - name: traefik
+          image: docker.io/traefik:v3.1
+          args: ["--configFile=/etc/traefik/traefik.yml"]
+          ports: [{ containerPort: 8080, name: web }]
+          # Identical CPU + memory budget vs the coraza pod below.
+          # No CPU limit per homelab convention; bounded memory so
+          # OOMKills are observable rather than silent.
+          # Memory bumped to 1Gi after observing Coraza OOMKilled at
+          # 512Mi under the corpus run. Both WAFs get the same budget
+          # so the comparison stays fair; the difference in actual
+          # memory consumption surfaces in the resource samples.
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: traefik-config, mountPath: /etc/traefik/traefik.yml, subPath: traefik.yml, readOnly: true }
+            - { name: traefik-config, mountPath: /etc/traefik/dynamic.yml, subPath: dynamic.yml, readOnly: true }
+            - { name: plugin, mountPath: /plugins-local/src/github.com/guaracloud/purple-wolf, readOnly: true }
+      volumes:
+        - name: traefik-config
+          configMap:
+            name: pw-traefik-config
+            items:
+              - { key: traefik.yml, path: traefik.yml }
+              - { key: dynamic.yml, path: dynamic.yml }
+        - name: manifest
+          configMap:
+            name: pw-plugin-manifest
+        - name: plugin
+          emptyDir: {}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-coraza
+  namespace: waf-bench
+  labels: { app.kubernetes.io/name: bench-coraza, waf: coraza }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: bench-coraza }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: bench-coraza, waf: coraza }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: homelab-01
+      initContainers:
+        - name: stage-plugin
+          image: docker.io/busybox:1.36-musl
+          command: ["sh", "/scripts/stage.sh"]
+          volumeMounts:
+            - { name: plugin, mountPath: /plugin }
+            - { name: manifest, mountPath: /manifest, readOnly: true }
+            - { name: stage-script, mountPath: /scripts, readOnly: true }
+      containers:
+        - name: whoami
+          image: docker.io/traefik/whoami:v1.10
+          args: ["--port", "8000"]
+          ports: [{ containerPort: 8000, name: whoami }]
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+        - name: traefik
+          image: docker.io/traefik:v3.1
+          args: ["--configFile=/etc/traefik/traefik.yml"]
+          ports: [{ containerPort: 8080, name: web }]
+          # Memory bumped to 1Gi after observing Coraza OOMKilled at
+          # 512Mi under the corpus run. Both WAFs get the same budget
+          # so the comparison stays fair; the difference in actual
+          # memory consumption surfaces in the resource samples.
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: traefik-config, mountPath: /etc/traefik/traefik.yml, subPath: traefik.yml, readOnly: true }
+            - { name: traefik-config, mountPath: /etc/traefik/dynamic.yml, subPath: dynamic.yml, readOnly: true }
+            - { name: plugin, mountPath: /plugins-local/src/github.com/jcchavezs/coraza-http-wasm-traefik, readOnly: true }
+      volumes:
+        - name: traefik-config
+          configMap:
+            name: coraza-traefik-config
+            items:
+              - { key: traefik.yml, path: traefik.yml }
+              - { key: dynamic.yml, path: dynamic.yml }
+        - name: manifest
+          configMap:
+            name: coraza-plugin-manifest
+        - name: stage-script
+          configMap:
+            name: coraza-stage-script
+            defaultMode: 0755
+        - name: plugin
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata: { name: bench-pw, namespace: waf-bench }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: bench-pw }
+  ports: [{ name: web, port: 8080, targetPort: web }]
+
+---
+apiVersion: v1
+kind: Service
+metadata: { name: bench-coraza, namespace: waf-bench }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: bench-coraza }
+  ports: [{ name: web, port: 8080, targetPort: web }]

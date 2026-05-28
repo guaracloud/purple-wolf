@@ -8,6 +8,13 @@
 /tests/relay_integration/target
 /tests/relay_integration/Cargo.lock
 /tests/relay_integration/shared
+
+# Benchmark raw results: keep one historic run committed for the
+# docs/benchmark.md reproducibility section; everything else is
+# session-scoped output.
+/benchmarks/results/*
+!/benchmarks/results/20260528-205913/
+!/benchmarks/results/.gitkeep
 **/*.rs.bk
 *.pdb
 

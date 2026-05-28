@@ -1,0 +1,20 @@
+GET __TARGET__/
+
+GET __TARGET__/?q=hello+world
+
+GET __TARGET__/about
+
+GET __TARGET__/products?cat=books&sort=date
+
+GET __TARGET__/search?q=javascript+tutorial
+
+GET __TARGET__/api/v1/users/42
+
+GET __TARGET__/blog/2026/05/release
+
+GET __TARGET__/?id=1%27%20OR%20%271%27%3D%271
+
+GET __TARGET__/?q=%3Cscript%3Ealert(1)%3C/script%3E
+
+GET __TARGET__/
+User-Agent: sqlmap/1.7
