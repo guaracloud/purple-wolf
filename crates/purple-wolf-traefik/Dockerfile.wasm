@@ -1,12 +1,17 @@
 # syntax=docker/dockerfile:1.6
 #
-# Tiny "asset" image carrying only the purple-wolf wasm plugin at a
-# stable, well-known path. Designed to be pulled by an initContainer
-# that copies the wasm into a shared volume the actual Traefik
-# container then loads via `--experimental.localPlugins`.
+# Tiny "asset" image carrying the purple-wolf wasm plugin at a stable,
+# well-known path. Designed to be pulled by an initContainer that
+# copies the wasm into a shared volume the actual Traefik container
+# then loads via `--experimental.localPlugins`.
+#
+# Why busybox instead of FROM scratch: K8s 1.31+ supports the image
+# volume source which would let a scratch image work as a read-only
+# bind mount. K3s 1.30 (homelab) doesn't have that yet, so we keep a
+# shell available for an initContainer `cp` step. Adds ~1 MB.
 #
 # Build context: this directory (where the workflow stages the wasm
 # next to this Dockerfile after `cargo build --release --target
 # wasm32-wasip1`).
-FROM scratch
+FROM busybox:1.36-musl
 COPY purple_wolf_traefik.wasm /purple_wolf_traefik.wasm
