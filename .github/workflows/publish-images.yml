@@ -1,0 +1,93 @@
+name: publish-images
+# Publishes the dev-channel OCI images:
+#   - ghcr.io/guaracloud/purple-wolf-relay  (the relay binary, distroless)
+#   - ghcr.io/guaracloud/purple-wolf-wasm   (just the .wasm plugin)
+#
+# Both are tagged with the rolling `:main` (when triggered from the
+# default branch) plus an immutable `:sha-<short>` per commit so
+# downstream deployments can pin if they need to.
+#
+# Release-tagged stable images (`:v0.3.0`, signed) come out of
+# release.yml, which is gated by the `release` environment.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_RELAY: ghcr.io/guaracloud/purple-wolf-relay
+  IMAGE_WASM: ghcr.io/guaracloud/purple-wolf-wasm
+
+jobs:
+  wasm-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-wasip1 }
+      - name: Install wasi-sdk
+        run: |
+          curl -sSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-22/wasi-sdk-22.0-linux.tar.gz | tar xz -C /opt
+          echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> $GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release wasm
+        run: cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
+      - name: Stage wasm next to its Dockerfile
+        run: cp target/wasm32-wasip1/release/purple_wolf_traefik.wasm crates/purple-wolf-traefik/purple_wolf_traefik.wasm
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_WASM }}
+          tags: |
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: crates/purple-wolf-traefik
+          file: crates/purple-wolf-traefik/Dockerfile.wasm
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  relay-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_RELAY }}
+          tags: |
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+      - uses: docker/setup-buildx-action@v3
+      # No QEMU: this dev-channel pipeline is x86_64 only by design.
+      # Multi-arch belongs in release.yml's signed-tag pipeline.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: crates/purple-wolf-relay/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache the cargo build across runs to keep wall time sane.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

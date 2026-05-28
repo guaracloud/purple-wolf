@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1.6
+#
+# Tiny "asset" image carrying only the purple-wolf wasm plugin at a
+# stable, well-known path. Designed to be pulled by an initContainer
+# that copies the wasm into a shared volume the actual Traefik
+# container then loads via `--experimental.localPlugins`.
+#
+# Build context: this directory (where the workflow stages the wasm
+# next to this Dockerfile after `cargo build --release --target
+# wasm32-wasip1`).
+FROM scratch
+COPY purple_wolf_traefik.wasm /purple_wolf_traefik.wasm
