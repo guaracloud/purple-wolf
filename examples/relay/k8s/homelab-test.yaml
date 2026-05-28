@@ -1,0 +1,443 @@
+# purple-wolf v0.3 homelab one-shot test stack.
+#
+# Apply with:
+#   kubectl apply -f examples/relay/k8s/homelab-test.yaml
+#
+# Then curl through the nginx-internal Ingress:
+#   curl 'http://pw-test.home/?id=1%27%20OR%20%271%27%3D%271'
+#
+# Expected: HTTP 403 from Traefik (WAF blocked the SQLi). Within a
+# few seconds the subscriber container records the delivery to
+# /shared/requests.jsonl; inspect via:
+#   kubectl exec -n purple-wolf-test deploy/pw-test -c subscriber \
+#       -- cat /shared/requests.jsonl
+#
+# Architecture: one Pod, four containers + one initContainer, all
+# sharing localhost networking + an emptyDir at /shared.
+#
+#   ┌─ Pod ──────────────────────────────────────────────────────┐
+#   │ initContainer: stage-plugin                                │
+#   │   pulls ghcr.io/guaracloud/purple-wolf-wasm:main, copies   │
+#   │   the .wasm + Traefik plugin manifest into a shared empty- │
+#   │   Dir at /plugins-local/src/.../purple-wolf/               │
+#   ├────────────────────────────────────────────────────────────┤
+#   │ whoami      :8000  — request echo (the "backend")          │
+#   │ traefik     :8080  — loads the WAF plugin, forwards to     │
+#   │                       localhost:8000, writes audit lines   │
+#   │                       (host::log calls) to /shared/        │
+#   │                       traefik.log                          │
+#   │ relay       :9090  — log_tail source on /shared/traefik.   │
+#   │                       log → parse → HMAC → POST to         │
+#   │                       localhost:8090/webhook               │
+#   │ subscriber  :8090  — verifies HMAC, records each delivery  │
+#   │                       to /shared/requests.jsonl            │
+#   └────────────────────────────────────────────────────────────┘
+#
+# This file is intentionally NOT under ArgoCD management — it's a
+# manual test artifact. Delete with:
+#   kubectl delete -f examples/relay/k8s/homelab-test.yaml
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: purple-wolf-test
+  labels:
+    purpose: dev-testing
+
+---
+# Traefik static + dynamic config + plugin manifest. We mount each
+# file individually via subPath so the directory layout matches
+# Traefik's localPlugins expectations.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traefik-config
+  namespace: purple-wolf-test
+data:
+  traefik.yml: |
+    entryPoints:
+      web:
+        address: ":8080"
+    providers:
+      file:
+        filename: /etc/traefik/dynamic.yml
+        watch: true
+    experimental:
+      localPlugins:
+        purpleWolf:
+          moduleName: github.com/guaracloud/purple-wolf
+    # The wasm guest's host::log calls land in Traefik's main log.
+    # Writing it to a shared file lets the relay's log_tail source
+    # consume the stream directly. Default format = common, which
+    # leaves embedded JSON un-escaped — the relay parser depends on
+    # that to extract the purple-wolf audit envelope.
+    log:
+      filePath: /shared/traefik.log
+      level: INFO
+    accessLog:
+      filePath: /shared/access.log
+      format: json
+  dynamic.yml: |
+    http:
+      routers:
+        test:
+          rule: "PathPrefix(`/`)"
+          entryPoints: [web]
+          service: whoami
+          middlewares: [strict-waf]
+      services:
+        whoami:
+          loadBalancer:
+            servers:
+              - url: "http://localhost:8000"
+      middlewares:
+        strict-waf:
+          plugin:
+            purpleWolf:
+              mode: enforce
+              # v0.3 labels — surface verbatim in every audit-log
+              # line for this Middleware and ride into the relay
+              # envelope as `labels:` at the top level.
+              labels:
+                tenant: acme
+                service: homelab-test
+                environment: homelab
+              groups:
+                injection:  { enabled: true, mode: enforce }
+                signatures: { enabled: true, mode: enforce }
+  .traefik.yml: |
+    displayName: purple-wolf
+    type: middleware
+    runtime: wasm
+    import: github.com/guaracloud/purple-wolf
+    summary: purple-wolf WAF — homelab test instance
+    testData:
+      mode: monitor
+      labels:
+        tenant: probe
+      groups:
+        injection: { enabled: true, mode: monitor }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-config
+  namespace: purple-wolf-test
+data:
+  relay.yaml: |
+    sources:
+      - type: log_tail
+        path: /shared/traefik.log
+        from_beginning: true
+
+    subscribers:
+      - id: e2e
+        url: http://localhost:8090/webhook
+        secret_env: INTEGRATION_SECRET
+        timeout_ms: 5000
+        retry:
+          max_attempts: 3
+          base_delay_ms: 200
+          max_delay_ms: 2000
+
+    relay:
+      instance_id: relay-homelab-test
+      subscriber_queue: 1024
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: subscriber-src
+  namespace: purple-wolf-test
+data:
+  subscriber.py: |
+    """Mock purple-wolf-relay subscriber for the homelab one-shot test.
+
+    Verifies the HMAC, dedupes on event_id, and appends each unique
+    delivery to /shared/requests.jsonl. The test harness reads that
+    file via `kubectl exec` after driving traffic through Traefik.
+    """
+    import hashlib, hmac, json, os, sys, time
+    from collections import OrderedDict
+    from flask import Flask, request, abort
+
+    SECRET = os.environ["PURPLEWOLF_SECRET"].encode()
+    RECORD_PATH = os.environ.get("RECORD_PATH", "/shared/requests.jsonl")
+    SKEW_S = 300
+    SEEN: "OrderedDict[str, float]" = OrderedDict()
+    SEEN_CAP = 10_000
+
+    app = Flask(__name__)
+
+    @app.post("/webhook")
+    def receive():
+        ts = request.headers.get("X-PurpleWolf-Timestamp", "")
+        sig = request.headers.get("X-PurpleWolf-Signature", "")
+        eid = request.headers.get("X-PurpleWolf-Event-Id", "")
+        if not (ts.isdigit() and sig.startswith("sha256=") and eid):
+            abort(400)
+        if abs(time.time() - int(ts)) > SKEW_S:
+            abort(401)
+        body = request.get_data()
+        expected = "sha256=" + hmac.new(
+            SECRET, f"{ts}.".encode() + body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            abort(401)
+        if eid in SEEN:
+            return ("", 200)
+        SEEN[eid] = time.time()
+        if len(SEEN) > SEEN_CAP:
+            SEEN.popitem(last=False)
+        record = {
+            "event_id": eid,
+            "delivery_id": request.headers.get("X-PurpleWolf-Delivery-Id", ""),
+            "attempt": request.headers.get("X-PurpleWolf-Attempt", ""),
+            "body": json.loads(body.decode()),
+        }
+        with open(RECORD_PATH, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        print(json.dumps(record), flush=True)
+        return ("", 200)
+
+    if __name__ == "__main__":
+        app.run(host="0.0.0.0", port=8090)
+
+---
+# HMAC secret shared between the relay (signs) and the subscriber
+# (verifies). Generated at random for this test.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pw-test-secret
+  namespace: purple-wolf-test
+type: Opaque
+stringData:
+  # `openssl rand -hex 32`-style placeholder; the relay/subscriber
+  # only require that signer and verifier share the same value.
+  hmac: homelab-test-secret-please-rotate-before-real-use
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pw-test
+  namespace: purple-wolf-test
+  labels:
+    app.kubernetes.io/name: purple-wolf-test
+spec:
+  replicas: 1
+  strategy:
+    # Bookmark + access-log live in an emptyDir; rolling pods would
+    # diverge. Single-pod, recreate-on-update is the right shape for
+    # a one-shot test.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: purple-wolf-test
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: purple-wolf-test
+    spec:
+      # fsGroup so the distroless relay (uid 65532) can write its
+      # bookmark file in /shared, which the root-running traefik
+      # container creates first.
+      securityContext:
+        fsGroup: 65532
+      initContainers:
+        - name: stage-plugin
+          image: ghcr.io/vicotrbb/purple-wolf-wasm:main
+          imagePullPolicy: Always
+          # The wasm image is busybox-based (see crates/purple-wolf-
+          # traefik/Dockerfile.wasm) so `cp` is available.
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cp /purple_wolf_traefik.wasm /plugin/plugin.wasm
+              cp /traefik-manifest/.traefik.yml /plugin/.traefik.yml
+              ls -la /plugin
+          volumeMounts:
+            - name: plugin
+              mountPath: /plugin
+            - name: traefik-manifest
+              mountPath: /traefik-manifest
+              readOnly: true
+      containers:
+        - name: whoami
+          image: docker.io/traefik/whoami:v1.10
+          args: ["--port", "8000"]
+          ports:
+            - name: whoami
+              containerPort: 8000
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+
+        - name: traefik
+          image: docker.io/traefik:v3.1
+          args:
+            - "--configFile=/etc/traefik/traefik.yml"
+          ports:
+            - name: web
+              containerPort: 8080
+          volumeMounts:
+            - name: traefik-config
+              mountPath: /etc/traefik/traefik.yml
+              subPath: traefik.yml
+              readOnly: true
+            - name: traefik-config
+              mountPath: /etc/traefik/dynamic.yml
+              subPath: dynamic.yml
+              readOnly: true
+            - name: plugin
+              mountPath: /plugins-local/src/github.com/guaracloud/purple-wolf
+              readOnly: true
+            - name: shared
+              mountPath: /shared
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+
+        - name: relay
+          image: ghcr.io/vicotrbb/purple-wolf-relay:main
+          imagePullPolicy: Always
+          args:
+            - "--config=/etc/relay/relay.yaml"
+            - "--admin-addr=0.0.0.0:9090"
+          ports:
+            - name: admin
+              containerPort: 9090
+          env:
+            - name: INTEGRATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pw-test-secret
+                  key: hmac
+            - name: RUST_LOG
+              value: "info"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          volumeMounts:
+            - name: relay-config
+              mountPath: /etc/relay
+              readOnly: true
+            - name: shared
+              mountPath: /shared
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          # distroless/nonroot already enforces nonroot; explicit for
+          # clarity.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+
+        - name: subscriber
+          image: docker.io/python:3.12-alpine
+          # Tiny inline install. For a more durable setup we'd bake
+          # Flask into the image; for a one-shot ~5s install at pod
+          # start is acceptable.
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              pip install --quiet flask
+              python /app/subscriber.py
+          ports:
+            - name: hook
+              containerPort: 8090
+          env:
+            - name: PURPLEWOLF_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pw-test-secret
+                  key: hmac
+          volumeMounts:
+            - name: subscriber-src
+              mountPath: /app
+              readOnly: true
+            - name: shared
+              mountPath: /shared
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { memory: 256Mi }
+
+      volumes:
+        - name: traefik-config
+          configMap:
+            name: traefik-config
+            items:
+              - { key: traefik.yml, path: traefik.yml }
+              - { key: dynamic.yml, path: dynamic.yml }
+        - name: traefik-manifest
+          configMap:
+            name: traefik-config
+            items:
+              - { key: .traefik.yml, path: .traefik.yml }
+        - name: relay-config
+          configMap:
+            name: relay-config
+        - name: subscriber-src
+          configMap:
+            name: subscriber-src
+        - name: plugin
+          emptyDir: {}
+        - name: shared
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pw-test
+  namespace: purple-wolf-test
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: purple-wolf-test
+  ports:
+    - name: web
+      port: 8080
+      targetPort: web
+    - name: admin
+      port: 9090
+      targetPort: admin
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pw-test
+  namespace: purple-wolf-test
+  annotations:
+    # Don't strip the path — Traefik's PathPrefix(`/`) matches all
+    # paths so we want them through verbatim.
+    nginx.ingress.kubernetes.io/use-regex: "false"
+spec:
+  ingressClassName: nginx-internal
+  rules:
+    - host: pw-test.home
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pw-test
+                port:
+                  number: 8080
