@@ -75,7 +75,7 @@ rolling pods.
 > public images — because GHCR treats credential failure as an
 > explicit rejection rather than falling back to anonymous. The
 > workaround baked into the manifest is `imagePullSecrets:
-> [ghcr-pull]`, a per-pod docker-registry Secret that overrides the
+[ghcr-pull]`, a per-pod docker-registry Secret that overrides the
 > node-level auth. See [Troubleshooting](#troubleshooting) below.
 
 ## Apply
@@ -83,7 +83,7 @@ rolling pods.
 1. **Create the namespace + the imagePullSecret.** The Secret has to
    exist before the pod tries to pull, so create it in advance from a
    PAT with `read:packages` scope (a `gh auth refresh -s
-   read:packages` token works):
+read:packages` token works):
 
    ```bash
    kubectl create namespace purple-wolf-test
@@ -156,12 +156,12 @@ Each line is one delivery. Look for:
 
 - `body.schema == "purple-wolf.audit/v1"`
 - `body.labels` contains `{environment: homelab, service:
-  homelab-test, tenant: acme}` (the Middleware's labels)
+homelab-test, tenant: acme}` (the Middleware's labels)
 - `body.source` contains `middleware: strict-waf`, `router: test`,
   `entry_point: web`, `relay_instance: relay-homelab-test`
 - `body.event.action == "block"` and an appropriate `blocked_rule`
 
-If the subscriber received the request *and* the HMAC verified, the
+If the subscriber received the request _and_ the HMAC verified, the
 line was written to the file. If it didn't verify, the subscriber
 would have returned 401 and the relay would have retried.
 
@@ -194,78 +194,3 @@ kubectl delete -f examples/relay/k8s/homelab-test.yaml
 kubectl delete secret ghcr-pull -n purple-wolf-test  # if you created it manually
 kubectl delete namespace purple-wolf-test            # belt-and-braces
 ```
-
-## Troubleshooting
-
-**`Init:ImagePullBackOff` with `403 Forbidden` on the GHCR token
-endpoint.** The cluster's containerd is sending invalid credentials
-for `ghcr.io`. Common causes:
-
-- The cluster's node-level `registries.yaml` has a stale or
-  unauthorized PAT (literal placeholder, expired token, or a PAT
-  for an account that can't read the org's packages).
-- SAML-SSO orgs require a separate "Configure SSO → Authorize"
-  step on the PAT in addition to the scope.
-
-The manifest works around this by creating a per-pod
-`imagePullSecret` (`ghcr-pull`) from a PAT that *does* have access.
-Per-pod auth wins over node-level config in containerd. If you'd
-rather fix it at the node level, edit `/etc/rancher/k3s/registries.
-yaml` on each node and `sudo systemctl restart k3s`.
-
-**`curl ... pw-test.home`: Connection reset / Connection refused.**
-Your local DNS isn't resolving the hostname. Either:
-
-- Add the ingress LB IP to your local resolver / `/etc/hosts`:
-  `192.168.50.200 pw-test.home`, or
-- Hit the LB IP directly with a Host header: `curl -H 'Host:
-  pw-test.home' http://192.168.50.200/`.
-
-**Pod is `Running` but the subscriber file is empty after sending
-attacks.** Two likely causes:
-
-- Traefik isn't writing audit lines to `/shared/traefik.log`. Check
-  `kubectl -n purple-wolf-test logs deploy/pw-test -c traefik` for
-  errors loading the wasm plugin or opening the log file.
-- The relay's `log_tail` source isn't picking up the file. Check
-  `kubectl -n purple-wolf-test logs deploy/pw-test -c relay` for a
-  startup line like `log_tail starting … path=/shared/traefik.log`.
-
-**HMAC failures (`401` in the subscriber logs).** The secret in
-`pw-test-secret` differs between what the relay signs with and what
-the subscriber verifies with. The manifest gives them both the same
-`hmac` key from the same Secret — if you customize, keep them in
-sync.
-
-## Known caveats
-
-- This stack runs on a single Pod. The relay's bookmark file lives
-  in `emptyDir`; a pod restart loses it. For a durable test setup,
-  bind the bookmark to a PVC. v0.3 doesn't ship a SQLite-backed DLQ
-  either — it's all in-memory. (v0.4 territory.)
-- Traefik is configured with `log.filePath: /shared/traefik.log`,
-  which means `kubectl logs deploy/pw-test -c traefik` will look
-  quiet — Traefik's own log doesn't reach stdout anymore. The
-  audit lines are in the file the relay tails.
-- The plugin manifest's `testData` (`.traefik.yml`) is a minimal
-  monitor-mode config used by Traefik to validate plugin
-  registration; the actual middleware behavior comes from
-  `dynamic.yml`. Don't confuse the two.
-- Labels in the manifest (`tenant: acme`, `service: homelab-test`,
-  `environment: homelab`) are deliberately bounded-cardinality.
-  Don't add per-request labels here — see the [cardinality
-  warning](configuration.md#cardinality-warning) in the config
-  reference.
-
-## Where to go next
-
-- **Generic K8s manifests** (production-shaped, ArgoCD-friendly):
-  see [`examples/relay/k8s/`](../examples/relay/k8s/).
-- **Wire protocol** the subscriber implements:
-  [`docs/webhook-protocol.md`](./webhook-protocol.md).
-- **Middleware configuration reference** (the `labels:` schema, body
-  caps, XFF trust model):
-  [`docs/configuration.md`](./configuration.md).
-- **Threat model** (what the WAF is and is not designed to catch;
-  webhook delivery trust model lives in §7):
-  [`THREAT_MODEL.md`](../THREAT_MODEL.md).
