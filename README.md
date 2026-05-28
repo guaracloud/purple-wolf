@@ -80,7 +80,10 @@ internet → Traefik (TLS, routing, your existing setup)
    block.
 
 For the full per-field configuration reference, see
-[`docs/configuration.md`](docs/configuration.md).
+[`docs/configuration.md`](docs/configuration.md). For a runnable
+end-to-end smoke test on a real Kubernetes cluster (WAF + relay +
+webhook subscriber in one Pod), see
+[`docs/homelab-test.md`](docs/homelab-test.md).
 
 ## Building and testing
 
