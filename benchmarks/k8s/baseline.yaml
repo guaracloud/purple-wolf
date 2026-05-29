@@ -1,0 +1,86 @@
+# Traefik-only baseline pod for the WAF benchmark.
+# Identical to bench-pw / bench-coraza except: NO middleware on the
+# router. Measures the floor latency of "Traefik → whoami on
+# localhost" so we can isolate the WAF cost from the total round
+# trip.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: baseline-traefik-config
+  namespace: waf-bench
+data:
+  traefik.yml: |
+    entryPoints:
+      web:
+        address: ":8080"
+    providers:
+      file:
+        filename: /etc/traefik/dynamic.yml
+        watch: false
+    log:
+      level: WARN
+  dynamic.yml: |
+    http:
+      routers:
+        bench:
+          rule: "PathPrefix(`/`)"
+          entryPoints: [web]
+          service: whoami
+          # no middlewares: this is the no-WAF baseline
+      services:
+        whoami:
+          loadBalancer:
+            servers:
+              - url: "http://localhost:8000"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-baseline
+  namespace: waf-bench
+  labels: { app.kubernetes.io/name: bench-baseline, waf: none }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: bench-baseline }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: bench-baseline, waf: none }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: homelab-01
+      containers:
+        - name: whoami
+          image: docker.io/traefik/whoami:v1.10
+          args: ["--port", "8000"]
+          ports: [{ containerPort: 8000, name: whoami }]
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+        - name: traefik
+          image: docker.io/traefik:v3.1
+          args: ["--configFile=/etc/traefik/traefik.yml"]
+          ports: [{ containerPort: 8080, name: web }]
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: cfg, mountPath: /etc/traefik/traefik.yml, subPath: traefik.yml, readOnly: true }
+            - { name: cfg, mountPath: /etc/traefik/dynamic.yml, subPath: dynamic.yml, readOnly: true }
+      volumes:
+        - name: cfg
+          configMap:
+            name: baseline-traefik-config
+            items:
+              - { key: traefik.yml, path: traefik.yml }
+              - { key: dynamic.yml, path: dynamic.yml }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: bench-baseline, namespace: waf-bench }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: bench-baseline }
+  ports: [{ name: web, port: 8080, targetPort: web }]
