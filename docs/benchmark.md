@@ -8,30 +8,35 @@ backend, same Traefik version, same node, same resource budget.
 
 **Up front:** purple-wolf is the project this benchmark lives in.
 Don't trust this document without reading the methodology and
-replaying it yourself — the source, the corpus, the runner, the
-manifest, and the per-iteration JSON results are all committed under
-[`benchmarks/`](../benchmarks/). One-command rerun:
-[`benchmarks/runner/run-all.sh`](../benchmarks/runner/run-all.sh).
+replaying it yourself — the source, the corpora, the runners, the
+manifests, and the per-iteration JSON results are all committed
+under [`benchmarks/`](../benchmarks/). One-command rerun:
+[`benchmarks/runner/round2/run-all-round2.sh`](../benchmarks/runner/round2/run-all-round2.sh)
+(round 2, supersedes round-1's `run-all.sh`).
 
-## TL;DR
+## TL;DR — round 2 numbers
 
-| Axis | purple-wolf v0.3 | Coraza v0.3.0 (http-wasm) | Verdict |
+| Axis | purple-wolf v0.3 | Coraza v0.3.0 (http-wasm, inline PL1) | Verdict |
 |---|---|---|---|
-| **Throughput** at 1000 RPS, same resources | sustained, p99 0.8–1.2 ms | melts: success 0.0, p99 > 30 s | **~10× sustained throughput** for purple-wolf at the tested budget |
-| **Latency** at 100 RPS | p50 0.7 ms, p99 1.2 ms | p50 0.9 ms, p99 2.3 ms | comparable; purple-wolf ~2× tighter p99 |
-| **CPU** under steady 1000 RPS | p50 93m, max 285m | (target unreachable: see above) | purple-wolf can be benchmarked at 1000 RPS; Coraza cannot |
-| **Memory** under load | p50 38 MiB, max 81 MiB | p50 6 MiB, max **946 MiB** | Coraza grew to 95% of the 1 GiB ceiling — OOM-prone at lower limits |
-| **SQLi TPR** (OWASP CRS 942 corpus, 934 vectors) | 13.3% (124/934) | 14.0% (131/934) | essentially tied |
-| **XSS TPR** (OWASP CRS 941 corpus, 217 vectors) | 32.7% (71/217) | 29.5% (64/217) | essentially tied, slight purple-wolf edge |
-| **False-positive rate** (53 benign requests) | 0% | 0% | both clean |
+| **Isolated WAF overhead** (vs Traefik-only baseline pod) | +0.1–0.2 ms p99 | n/a (collapsed) | invisible at typical backend latencies |
+| **Sustained throughput** at 200 m CPU / 1 GiB | clean to **~8 000 RPS**, breaks 12 k–16 k | **collapses at 500 RPS** (success → 0.0065, p99 → 28 s) | **~16-20× more sustained RPS** for purple-wolf |
+| **Memory under load** (10-min soak at 1000 RPS) | 80–96 MiB band, **no drift** | 6 MiB p50 / **946 MiB max** in round 1 (OOM-killed 5× at 512 MiB) | purple-wolf flat; Coraza grew to 95 % of the 1 GiB ceiling |
+| **CPU under load** (10-min soak at 1000 RPS) | 270 m p50 / 285 m max | n/a (target unreachable at 500 + RPS) | purple-wolf benchmark-able at sustained load; Coraza wasn't |
+| **Detection** across **12 CRS classes**, 4 536 vectors | **14.55 % overall TPR** | 6.11 % overall TPR | **2.4× more attacks blocked** at the same Paranoia-1 ruleset; Java (+26.5 %), RCE (+6.3 %), XSS (+5.1 %) are the biggest margins |
+| **False-positive rate** (53 hand-curated benigns) | 0 % | 0 % | both clean; N=53 is small — see follow-ups |
+| **Documented detection gaps** | UA-SQLi with `Mozilla/` prefix; bare `;wget` in query | (not separately characterized) | surfaced in `THREAT_MODEL.md §3.2.1` and `docs/configuration.md` |
 
-The honest summary: **on the same Paranoia-1-equivalent corpus the
-two WAFs detect roughly the same fraction of attacks; under the same
-resource ceiling, purple-wolf's footprint is an order of magnitude
-smaller in both CPU and memory.** The throughput advantage at the
-tested budget (200m CPU request, 1 GiB memory limit) is dominated by
-Coraza's ModSec rule engine growing wasm linear memory toward the
-limit under load.
+The honest summary: **on the same Paranoia-1-equivalent ruleset
+across the broader OWASP CRS corpus, purple-wolf blocks 2.4× more
+attack vectors than Coraza at the same resource ceiling, while
+adding only ~0.1–0.2 ms p99 to the request path and staying flat in
+memory under sustained load.** Both WAFs miss the CRS atomic-token
+tests by design — that's the precision-over-recall stance the
+detector engine takes, documented in the threat model.
+
+The original round-1 TL;DR — same direction but limited to a
+SQLi+XSS subcorpus at 100–1000 RPS — is preserved below in the
+"Round 2 — expanded matrix" section for traceability.
 
 ## Methodology
 

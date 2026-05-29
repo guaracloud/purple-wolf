@@ -83,10 +83,53 @@ For the full per-field configuration reference, see
 [`docs/configuration.md`](docs/configuration.md). For a runnable
 end-to-end smoke test on a real Kubernetes cluster (WAF + relay +
 webhook subscriber in one Pod), see
-[`docs/homelab-test.md`](docs/homelab-test.md). For a head-to-head
-benchmark against [Coraza](https://coraza.io/) on identical Kubernetes
-topology (throughput, latency, resource usage, security efficacy),
-see [`docs/benchmark.md`](docs/benchmark.md).
+[`docs/homelab-test.md`](docs/homelab-test.md).
+
+## Benchmark — head-to-head with Coraza, on the same cluster
+
+Same Kubernetes topology, same Traefik v3.1, same backend, same
+200 m CPU / 1 GiB resource budget, same OWASP CRS corpus — only the
+WAF engine differs. Two rounds; round 2 expanded the matrix to a no-
+WAF baseline pod, a ramp-to-break sweep, 12 CRS attack classes
+(4 536 vectors), a 10-minute soak with resource sampling, and a
+small functional robustness suite.
+
+Headline results (full methodology + tables + caveats in
+[`docs/benchmark.md`](docs/benchmark.md)):
+
+- **Isolated WAF overhead: +0.1–0.2 ms p99** vs a Traefik-only baseline
+  pod. Invisible at typical backend latencies.
+- **Sustained throughput at the same resources:** purple-wolf is
+  clean to ~8 000 RPS; Coraza http-wasm collapses at 500 RPS. About
+  **16–20× more sustained RPS** for purple-wolf at the tested
+  ceiling.
+- **Detection across 12 CRS rule classes (4 536 vectors):**
+  purple-wolf **14.55 %** overall TPR vs Coraza inline-PL1
+  **6.11 %** — **2.4× more attacks blocked**, with **0 %** FPR on
+  the benign corpus for both. Java (+26.5 %), RCE (+6.3 %), XSS
+  (+5.1 %) are the biggest margins.
+- **Memory under sustained load:** stable in an 80–96 MiB band over
+  a 10-minute soak at 1 000 RPS, no drift. Coraza peaked at
+  946 MiB during round 1 (OOM-killed five times at the original
+  512 MiB ceiling).
+- **Documented detection gaps**, both surfaced from the benchmark
+  and propagated into the threat model and config docs: User-Agent
+  SQLi with a `Mozilla/` prefix is not blocked; bare `;wget` in
+  query strings is not blocked. See
+  [`THREAT_MODEL.md §3.2.1`](THREAT_MODEL.md).
+
+The benchmark is reproducible end-to-end:
+[`benchmarks/runner/round2/run-all-round2.sh`](benchmarks/runner/round2/run-all-round2.sh).
+Raw JSONL + CSV outputs from the published runs live under
+[`benchmarks/results/`](benchmarks/results/).
+
+**What the benchmark is not:** a claim that purple-wolf is "better"
+than Coraza. Coraza's *native* (Go-binding) Traefik integration is
+faster and rule-richer than the http-wasm path measured here, and
+full OWASP CRS catches far more atomic-token tests than either
+engine in this comparison — at higher FPR. The comparison is
+honestly bounded: same plugin shape, same resource ceiling, same
+yardstick.
 
 ## Building and testing
 
