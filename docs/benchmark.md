@@ -485,3 +485,42 @@ upstream.
 If you find a flaw in the methodology, open an issue or PR against
 this repo — the result files + scripts are committed; the discussion
 is in the open.
+
+## Round 2 follow-ups (explicitly not done)
+
+Things round 2 *did not* close, listed explicitly so they don't get
+mistaken for "everything checks out."
+
+1. **60-minute soak.** Round 2 has a clean 10-minute soak at 1000 RPS
+   with stable memory; we don't yet have evidence over a one-hour or
+   one-day window. The first attempt (1 h × 2 000 RPS) was lost when
+   the parallel ramp-to-break load destabilized the K3s API on the
+   shared node. Re-run on a quiet cluster (or a dedicated node) is
+   the right next step — script lives at
+   [`benchmarks/runner/round2/run-all-round2.sh`](../benchmarks/runner/round2/run-all-round2.sh),
+   bump the soak step's `--duration` from `10m` to `1h`.
+2. **Realistic-shape benign corpus.** Still 53 hand-curated requests.
+   The 0% FPR claim should be widened by replaying a real
+   anonymized day of HTTP traffic from a small production service.
+   Out of scope here — that requires a data source nobody in this
+   repo has access to.
+3. **External pen test.** Same threat-model claim as before: someone
+   not on the project should spend a week trying to break the WAF
+   and the relay's HMAC scheme. We have unit-level fuzz targets in
+   [`fuzz/`](../fuzz/) — those exercise the engine in isolation, not
+   the full live-stack attack surface.
+4. **More documented detection gaps.** Round 2 surfaced two
+   ([User-Agent SQLi with `Mozilla/` prefix](../THREAT_MODEL.md#321-empirically-observed-detection-gaps-round-2-benchmark),
+   bare `;wget` in query). The systematic survey — for each CRS rule
+   class, identify the *kind* of payload purple-wolf misses and why
+   — has not been done. Worth a round 3.
+5. **Round-2 results are *inspectable* but the broader-corpus runner
+   used a one-shot bash+curl loop that's slower than the round-1
+   Python streaming runner.** Rewriting the Python runner with
+   line-buffered output (instead of the default block buffering that
+   hid progress) would let future runs hit the same fidelity at much
+   higher throughput. Doable in an hour.
+
+Anyone re-running this benchmark should treat the follow-ups list as
+a checklist, not a wishlist — and update this doc with what they
+find.

