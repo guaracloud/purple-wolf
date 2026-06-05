@@ -10,3 +10,4 @@ experimental:
       moduleName: github.com/guaracloud/purple-wolf
 log:
   level: INFO
+  filePath: /shared/traefik.log

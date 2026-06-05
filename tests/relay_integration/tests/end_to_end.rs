@@ -39,6 +39,19 @@ fn compose_up() {
     // Clean any previous shared state.
     let _ = std::fs::create_dir_all("shared");
     let _ = std::fs::remove_file("shared/requests.jsonl");
+    let _ = std::fs::remove_file("shared/traefik.log");
+    let _ = std::fs::remove_file("shared/traefik.log.purple-wolf-relay.bookmark");
+    let _ = std::fs::remove_file("shared/traefik.log.purple-wolf-relay.bookmark.tmp");
+    std::fs::File::create("shared/traefik.log").expect("create shared Traefik log");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            "shared/traefik.log",
+            std::fs::Permissions::from_mode(0o666),
+        )
+        .expect("make shared Traefik log writable");
+    }
     let _ = Command::new("docker")
         .args(["compose", "down", "-v"])
         .current_dir(".")
@@ -71,21 +84,6 @@ fn drive_sqli() {
     let _ = ureq::get("http://127.0.0.1:8080/e/?id=1%27%20OR%20%271%27%3D%271").call();
 }
 
-/// Pump Traefik's container logs into the relay's stdin. Started in a
-/// daemon thread; runs until compose_down kills the relay.
-fn start_log_pump() {
-    std::thread::spawn(|| {
-        let _ = Command::new("sh")
-            .args([
-                "-c",
-                "docker compose logs -f --no-color traefik | \
-                 docker compose exec -T relay tee /dev/stdin >/dev/null",
-            ])
-            .current_dir(".")
-            .status();
-    });
-}
-
 #[test]
 #[ignore = "requires docker on PATH; run with --ignored or via the relay-integration CI matrix"]
 fn full_stack_delivers_envelope_with_labels_to_subscriber() {
@@ -93,7 +91,6 @@ fn full_stack_delivers_envelope_with_labels_to_subscriber() {
     build_relay();
     let _s = Stack;
     compose_up();
-    start_log_pump();
 
     drive_sqli();
     std::thread::sleep(Duration::from_secs(3));

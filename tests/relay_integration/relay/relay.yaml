@@ -1,10 +1,11 @@
 # Relay config for the docker-compose full-stack test.
-# Reads from a log file that Traefik writes via its docker-driver
-# logs (mounted into the relay container). For the integration test
-# harness, we use stdin instead — see the test harness for the
-# docker-compose log-tail wiring.
+# Reads audit lines from the Traefik log file mounted into both
+# containers. The test harness creates the file before Compose starts
+# so the relay can open it at startup.
 sources:
-  - type: stdin
+  - type: log_tail
+    path: /shared/traefik.log
+    from_beginning: true
 
 subscribers:
   - id: e2e

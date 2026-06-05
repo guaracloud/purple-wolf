@@ -27,6 +27,7 @@ services:
       - ./traefik:/etc/traefik:ro
       - ./plugin/.traefik.yml:/plugins-local/src/github.com/guaracloud/purple-wolf/.traefik.yml:ro
       - ../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm:/plugins-local/src/github.com/guaracloud/purple-wolf/plugin.wasm:ro
+      - ./shared:/shared
     depends_on:
       - upstream
 
@@ -43,6 +44,7 @@ services:
     volumes:
       - ../..:/workspace:ro
       - ./relay:/etc/relay:ro
+      - ./shared:/shared
     environment:
       - INTEGRATION_SECRET=integration-test-secret
       - RUST_LOG=info
