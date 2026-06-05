@@ -42,7 +42,7 @@ jobs:
           echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> "$GITHUB_ENV"
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62  # v3.10.0
 
       - name: Build release WASM and relay
         run: |
@@ -177,7 +177,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62  # v3.10.0
       - name: Install SBOM tooling
         run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Build, checksum, sign, and verify relay
@@ -216,7 +216,7 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v4
-      - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62  # v3.10.0
 
       - name: Install SBOM verifier
         run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
