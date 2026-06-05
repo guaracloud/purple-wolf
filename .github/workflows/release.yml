@@ -1,128 +1,93 @@
 name: release
+
 on:
   push:
     tags: ["v*"]
 
-# Prevent two release jobs racing on the same tag (NEW-H6). Two pushes
-# would otherwise both try to upload assets and `cargo publish`,
-# producing a half-released state.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_RELAY: ghcr.io/guaracloud/purple-wolf-relay
+  IMAGE_WASM: ghcr.io/guaracloud/purple-wolf-wasm
+  CHART_REPOSITORY: oci://ghcr.io/guaracloud/charts
+
 jobs:
   publish-and-sign:
     runs-on: ubuntu-latest
-    # Required-reviewer gate (NEW-H6). The `release` environment must be
-    # configured on the repo with at least one required reviewer before
-    # the first tag push, otherwise this job will queue indefinitely.
-    # That's the intended fail-closed behavior — better than letting an
-    # accidental tag push fire crates.io + cosign sign-blob.
     environment: release
     permissions:
       contents: write
-      id-token: write   # for cosign keyless
+      id-token: write
+      packages: write
+    outputs:
+      relay_image_digest: ${{ steps.relay_image.outputs.digest }}
+      wasm_image_digest: ${{ steps.wasm_image.outputs.digest }}
+      chart_digest: ${{ steps.chart_push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
+
       - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-wasip1 }
-      - name: Install wasi-sdk
+        with:
+          targets: wasm32-wasip1
+
+      - name: Install release tooling
         run: |
+          set -euo pipefail
           curl -sSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-22/wasi-sdk-22.0-linux.tar.gz | tar xz -C /opt
-          echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> $GITHUB_ENV
-      - name: Build release WASM
-        run: cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
-      - name: Compute SHA256
-        run: sha256sum target/wasm32-wasip1/release/purple_wolf_traefik.wasm > purple-wolf.wasm.sha256
-      # SHA-pin supply-chain-critical actions (NEW-I6). Both
-      # cosign-installer and action-gh-release have access to the
-      # release identity (id-token + GH_TOKEN); a floating tag is the
-      # easiest way to lose signing integrity. Dependabot will still
-      # propose bumps via the `# vN.M.K` comment.
+          echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> "$GITHUB_ENV"
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
       - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
-      - name: Cosign keyless sign the WASM
-        run: |
-          cosign sign-blob --yes \
-            target/wasm32-wasip1/release/purple_wolf_traefik.wasm \
-            --output-signature purple-wolf.wasm.sig \
-            --output-certificate purple-wolf.wasm.pem
-      # Verify what we just signed — fail-closed if the signature blob is
-      # not actually verifiable against the certificate identity. Prevents
-      # the "signed but unverifiable" outcome that would leave consumers
-      # downloading an asset with a meaningless signature.
-      - name: Verify the just-signed blob
-        run: |
-          cosign verify-blob \
-            --signature purple-wolf.wasm.sig \
-            --certificate purple-wolf.wasm.pem \
-            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
-            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            target/wasm32-wasip1/release/purple_wolf_traefik.wasm
-      - uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
-        with:
-          files: |
-            target/wasm32-wasip1/release/purple_wolf_traefik.wasm
-            purple-wolf.wasm.sha256
-            purple-wolf.wasm.sig
-            purple-wolf.wasm.pem
-      # NEW-I7: guard `cargo publish` so a re-pushed tag that didn't bump
-      # the version doesn't fail *after* assets were already published
-      # (leaving a half-released state). Dry-run first; only publish if
-      # the dry-run succeeds.
-      - name: Verify crates.io publish would succeed (dry-run)
-        run: cargo publish -p purple-wolf-core --dry-run
-      - name: Publish core to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p purple-wolf-core
 
-      # ----- v0.3: purple-wolf-relay binaries + docker image -----
-      #
-      # Builds the relay for linux/{amd64,arm64} (via Buildx) and
-      # macos targets in a parallel job below, cosign-signs each
-      # binary + the image manifest, publishes the crate to crates.io
-      # (dry-run first, fail-closed). Tag pushes are gated by the
-      # release environment's required-reviewer rule.
-      - name: Build relay (linux/amd64)
-        run: cargo build --release -p purple-wolf-relay
-      - name: Compute relay SHA256 (linux/amd64)
+      - name: Build release WASM and relay
         run: |
-          sha256sum target/release/purple-wolf-relay \
-            > purple-wolf-relay-linux-amd64.sha256
-      - name: Cosign keyless sign the relay binary
-        run: |
-          cosign sign-blob --yes \
-            target/release/purple-wolf-relay \
-            --output-signature purple-wolf-relay-linux-amd64.sig \
-            --output-certificate purple-wolf-relay-linux-amd64.pem
-      - name: Verify the relay signature
-        run: |
-          cosign verify-blob \
-            --signature purple-wolf-relay-linux-amd64.sig \
-            --certificate purple-wolf-relay-linux-amd64.pem \
-            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
-            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            target/release/purple-wolf-relay
-      - name: Attach relay binary + sig to the release
-        uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
-        with:
-          files: |
-            target/release/purple-wolf-relay
-            purple-wolf-relay-linux-amd64.sha256
-            purple-wolf-relay-linux-amd64.sig
-            purple-wolf-relay-linux-amd64.pem
+          set -euo pipefail
+          cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
+          cargo build --release -p purple-wolf-relay
+          mkdir -p dist
+          cp target/wasm32-wasip1/release/purple_wolf_traefik.wasm dist/purple_wolf_traefik.wasm
+          cp target/release/purple-wolf-relay dist/purple-wolf-relay-linux-amd64
 
-      # Docker image: build multi-arch, push to GHCR, cosign-sign.
+      - name: Generate SBOMs for release files
+        run: |
+          set -euo pipefail
+          syft dir:. -o spdx-json=dist/purple-wolf-source.spdx.json
+          syft file:dist/purple_wolf_traefik.wasm -o spdx-json=dist/purple_wolf_traefik.wasm.spdx.json
+          syft file:dist/purple-wolf-relay-linux-amd64 -o spdx-json=dist/purple-wolf-relay-linux-amd64.spdx.json
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Build + push relay image
+
+      - name: Stage WASM image context
+        run: cp dist/purple_wolf_traefik.wasm crates/purple-wolf-traefik/purple_wolf_traefik.wasm
+
+      - name: Build and push WASM asset image
+        id: wasm_image
+        uses: docker/build-push-action@v6
+        with:
+          context: crates/purple-wolf-traefik
+          file: crates/purple-wolf-traefik/Dockerfile.wasm
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_WASM }}:${{ github.ref_name }}
+            ${{ env.IMAGE_WASM }}:latest
+          provenance: true
+          sbom: true
+
+      - name: Build and push relay image
         id: relay_image
         uses: docker/build-push-action@v6
         with:
@@ -131,26 +96,84 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/guaracloud/purple-wolf-relay:${{ github.ref_name }}
-            ghcr.io/guaracloud/purple-wolf-relay:latest
+            ${{ env.IMAGE_RELAY }}:${{ github.ref_name }}
+            ${{ env.IMAGE_RELAY }}:latest
           provenance: true
           sbom: true
-      - name: Cosign sign the image manifest
-        env:
-          DIGEST: ${{ steps.relay_image.outputs.digest }}
-        run: |
-          cosign sign --yes "ghcr.io/guaracloud/purple-wolf-relay@${DIGEST}"
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Verify relay crates.io publish would succeed (dry-run)
-        run: cargo publish -p purple-wolf-relay --dry-run
-      - name: Publish relay to crates.io
+      - name: Sign release images and export image SBOMs
+        env:
+          RELAY_DIGEST: ${{ steps.relay_image.outputs.digest }}
+          WASM_DIGEST: ${{ steps.wasm_image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE_RELAY}@${RELAY_DIGEST}"
+          cosign sign --yes "${IMAGE_WASM}@${WASM_DIGEST}"
+          syft "${IMAGE_RELAY}@${RELAY_DIGEST}" -o spdx-json=dist/purple-wolf-relay-image.spdx.json
+          syft "${IMAGE_WASM}@${WASM_DIGEST}" -o spdx-json=dist/purple-wolf-wasm-image.spdx.json
+
+      - name: Package and publish Helm chart
+        id: chart_push
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          chart_version="${VERSION#v}"
+          helm package charts/purple-wolf --version "$chart_version" --app-version "$chart_version" --destination dist
+          chart="$(ls dist/purple-wolf-*.tgz)"
+          syft "$chart" -o spdx-json=dist/purple-wolf-chart.spdx.json
+          helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+          helm push "$chart" "$CHART_REPOSITORY" | tee /tmp/purple-wolf-helm-push.txt
+          digest="$(grep -E '^Digest:' /tmp/purple-wolf-helm-push.txt | awk '{print $2}')"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Checksum, sign, and verify release files
+        run: |
+          set -euo pipefail
+          cd dist
+          for artifact in \
+            purple_wolf_traefik.wasm \
+            purple-wolf-relay-linux-amd64 \
+            purple-wolf-source.spdx.json \
+            purple_wolf_traefik.wasm.spdx.json \
+            purple-wolf-relay-linux-amd64.spdx.json \
+            purple-wolf-relay-image.spdx.json \
+            purple-wolf-wasm-image.spdx.json \
+            purple-wolf-chart.spdx.json \
+            purple-wolf-*.tgz
+          do
+            sha256sum "$artifact" > "$artifact.sha256"
+            cosign sign-blob --yes "$artifact" \
+              --output-signature "$artifact.sig" \
+              --output-certificate "$artifact.pem"
+            cosign verify-blob \
+              --signature "$artifact.sig" \
+              --certificate "$artifact.pem" \
+              --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "$artifact"
+          done
+
+      - name: Attach Linux artifacts to release
+        uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
+        with:
+          files: dist/*
+
+      - name: Verify crates.io publish would succeed
+        run: |
+          cargo publish -p purple-wolf-core --dry-run
+          cargo publish -p purple-wolf-relay --dry-run
+
+      - name: Publish crates to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p purple-wolf-relay
+        run: |
+          cargo publish -p purple-wolf-core
+          cargo publish -p purple-wolf-relay
 
-  # macOS binaries for the relay. Linux artifacts come from the
-  # publish-and-sign job; mac builds run here in parallel and attach
-  # to the same release.
   publish-relay-macos:
     needs: publish-and-sign
     runs-on: macos-latest
@@ -166,36 +189,173 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Build relay
-        env:
-          TARGET: ${{ matrix.target }}
-        run: cargo build --release -p purple-wolf-relay --target "$TARGET"
-      - name: Rename + SHA256
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          out="purple-wolf-relay-${TARGET}"
-          cp "target/${TARGET}/release/purple-wolf-relay" "$out"
-          shasum -a 256 "$out" > "${out}.sha256"
       - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
-      - name: Cosign sign + verify
+      - name: Install SBOM tooling
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Build, checksum, sign, and verify relay
         env:
           TARGET: ${{ matrix.target }}
         run: |
+          set -euo pipefail
+          cargo build --release -p purple-wolf-relay --target "$TARGET"
+          mkdir -p dist
           out="purple-wolf-relay-${TARGET}"
-          cosign sign-blob --yes "$out" \
-            --output-signature "${out}.sig" \
-            --output-certificate "${out}.pem"
-          cosign verify-blob \
-            --signature "${out}.sig" \
-            --certificate "${out}.pem" \
-            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
-            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            "$out"
+          cp "target/${TARGET}/release/purple-wolf-relay" "dist/${out}"
+          cd dist
+          syft file:"$out" -o spdx-json="${out}.spdx.json"
+          for artifact in "$out" "${out}.spdx.json"; do
+            shasum -a 256 "$artifact" > "${artifact}.sha256"
+            cosign sign-blob --yes "$artifact" \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem"
+            cosign verify-blob \
+              --signature "${artifact}.sig" \
+              --certificate "${artifact}.pem" \
+              --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "$artifact"
+          done
       - uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8  # v2.1.0
         with:
-          files: |
-            purple-wolf-relay-${{ matrix.target }}
-            purple-wolf-relay-${{ matrix.target }}.sha256
-            purple-wolf-relay-${{ matrix.target }}.sig
-            purple-wolf-relay-${{ matrix.target }}.pem
+          files: dist/*
+
+  post-release-verify:
+    needs: [publish-and-sign, publish-relay-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sigstore/cosign-installer@9f435d7d65b8a2af6e88c6d52c8e87b39ff96e0a  # v3.10.0
+
+      - name: Install SBOM verifier
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p verify
+          gh release download "$TAG" --dir verify --clobber
+
+      - name: Verify checksums, blob signatures, images, and SBOM JSON
+        env:
+          RELAY_DIGEST: ${{ needs.publish-and-sign.outputs.relay_image_digest }}
+          WASM_DIGEST: ${{ needs.publish-and-sign.outputs.wasm_image_digest }}
+        run: |
+          set -euo pipefail
+          cd verify
+          for sum in *.sha256; do
+            sha256sum -c "$sum"
+          done
+          for sig in *.sig; do
+            artifact="${sig%.sig}"
+            pem="${artifact}.pem"
+            test -f "$artifact"
+            test -f "$pem"
+            cosign verify-blob \
+              --signature "$sig" \
+              --certificate "$pem" \
+              --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "$artifact"
+          done
+          for sbom in *.spdx.json; do
+            jq -e '.spdxVersion and .packages' "$sbom" >/dev/null
+          done
+          cosign verify \
+            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${IMAGE_RELAY}@${RELAY_DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${IMAGE_WASM}@${WASM_DIGEST}"
+
+      - name: Generate release manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          RELAY_DIGEST: ${{ needs.publish-and-sign.outputs.relay_image_digest }}
+          WASM_DIGEST: ${{ needs.publish-and-sign.outputs.wasm_image_digest }}
+          CHART_DIGEST: ${{ needs.publish-and-sign.outputs.chart_digest }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json assets > assets.json
+          python3 - <<'PY'
+          import json, os
+
+          with open("assets.json", "r", encoding="utf-8") as f:
+              payload = json.load(f)
+
+          assets = []
+          for item in sorted(payload["assets"], key=lambda a: a["name"]):
+              if item["name"].startswith("release-manifest.json"):
+                  continue
+              assets.append({
+                  "name": item["name"],
+                  "size": item["size"],
+                  "url": item["url"],
+              })
+
+          manifest = {
+              "schema": "purple-wolf.release-manifest/v1",
+              "tag": os.environ["TAG"],
+              "repository": "guaracloud/purple-wolf",
+              "artifacts": assets,
+              "images": [
+                  {
+                      "name": os.environ["IMAGE_RELAY"],
+                      "reference": f'{os.environ["IMAGE_RELAY"]}@{os.environ["RELAY_DIGEST"]}',
+                      "digest": os.environ["RELAY_DIGEST"],
+                  },
+                  {
+                      "name": os.environ["IMAGE_WASM"],
+                      "reference": f'{os.environ["IMAGE_WASM"]}@{os.environ["WASM_DIGEST"]}',
+                      "digest": os.environ["WASM_DIGEST"],
+                  },
+              ],
+              "helm_chart": {
+                  "name": "purple-wolf",
+                  "repository": os.environ["CHART_REPOSITORY"],
+                  "reference": f'{os.environ["CHART_REPOSITORY"]}/purple-wolf',
+                  "digest": os.environ["CHART_DIGEST"],
+              },
+              "provenance": {
+                  "slsa": "deferred",
+                  "signing": "keyless cosign via GitHub OIDC",
+                  "sbom": "SPDX JSON",
+              },
+          }
+          with open("release-manifest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+          jq -e '.schema == "purple-wolf.release-manifest/v1" and (.artifacts | length > 0)' release-manifest.json >/dev/null
+
+      - name: Sign and upload release manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sha256sum release-manifest.json > release-manifest.json.sha256
+          cosign sign-blob --yes release-manifest.json \
+            --output-signature release-manifest.json.sig \
+            --output-certificate release-manifest.json.pem
+          cosign verify-blob \
+            --signature release-manifest.json.sig \
+            --certificate release-manifest.json.pem \
+            --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            release-manifest.json
+          gh release upload "$TAG" \
+            release-manifest.json \
+            release-manifest.json.sha256 \
+            release-manifest.json.sig \
+            release-manifest.json.pem \
+            --clobber

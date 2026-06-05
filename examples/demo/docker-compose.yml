@@ -1,0 +1,75 @@
+services:
+  log-init:
+    image: busybox:1.36-musl
+    command: ["sh", "-c", "mkdir -p /shared && touch /shared/traefik.log /shared/access.log /shared/requests.jsonl"]
+    volumes:
+      - shared:/shared
+
+  wasm-builder:
+    build:
+      context: ../..
+      dockerfile: examples/demo/Dockerfile.wasm-builder
+    volumes:
+      - wasm-plugin:/out
+
+  upstream:
+    image: python:3-alpine
+    command: ["python", "-m", "http.server", "8000"]
+
+  traefik:
+    image: traefik:v3
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./traefik:/etc/traefik:ro
+      - wasm-plugin:/plugins-local/src/github.com/guaracloud/purple-wolf:ro
+      - shared:/shared
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      wasm-builder:
+        condition: service_completed_successfully
+      upstream:
+        condition: service_started
+
+  subscriber:
+    image: python:3-alpine
+    working_dir: /app
+    command: ["python", "/app/subscriber.py"]
+    environment:
+      PURPLEWOLF_SECRET: demo-secret
+      RECORD_PATH: /shared/requests.jsonl
+    volumes:
+      - ./subscriber.py:/app/subscriber.py:ro
+      - shared:/shared
+    ports:
+      - "8090:8090"
+
+  relay:
+    build:
+      context: ../..
+      dockerfile: crates/purple-wolf-relay/Dockerfile
+    command:
+      - --config=/etc/purple-wolf-relay/relay.yaml
+      - --admin-addr=0.0.0.0:9090
+    environment:
+      DEMO_HMAC_SECRET: demo-secret
+      RUST_LOG: info
+    volumes:
+      - ./relay.yaml:/etc/purple-wolf-relay/relay.yaml:ro
+      - shared:/shared
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      traefik:
+        condition: service_started
+      subscriber:
+        condition: service_started
+    ports:
+      - "9090:9090"
+
+volumes:
+  wasm-plugin: {}
+  shared: {}

@@ -23,7 +23,7 @@ pub struct Config {
     /// Zero or more enrichers, applied in order to each envelope.
     #[serde(default)]
     pub enrichments: Vec<EnricherConfig>,
-    /// One or more webhook subscribers. Required.
+    /// Zero or more webhook subscribers.
     pub subscribers: Vec<SubscriberConfig>,
     /// Process-wide knobs (mostly defaultable).
     #[serde(default)]
@@ -254,7 +254,7 @@ pub fn validate(cfg: &Config) -> anyhow::Result<Resolved> {
         anyhow::bail!("config: at least one source must be configured");
     }
     if cfg.subscribers.is_empty() {
-        anyhow::bail!("config: at least one subscriber must be configured");
+        tracing::warn!("config: no subscribers configured; relay will start but deliver nothing");
     }
 
     // Subscriber ids must be unique — they appear in metrics labels and
@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_no_subscribers() {
+    fn validate_accepts_no_subscribers() {
         let cfg = load_from_str(
             r#"
             sources: [{ type: stdin }]
@@ -462,8 +462,8 @@ mod tests {
             "#,
         )
         .unwrap();
-        let err = validate(&cfg).unwrap_err();
-        assert!(err.to_string().contains("subscriber"), "err: {err}");
+        let resolved = validate(&cfg).unwrap();
+        assert!(resolved.subscriber_secrets.is_empty());
     }
 
     #[test]

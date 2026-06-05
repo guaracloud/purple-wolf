@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: purple-wolf-relay
+  labels:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: purple-wolf
+      app.kubernetes.io/component: webhook-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: purple-wolf
+        app.kubernetes.io/component: webhook-relay
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relay
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.3.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/purple-wolf-relay/relay.yaml
+            - --admin-addr=0.0.0.0:9090
+          ports:
+            - name: admin
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/purple-wolf-relay
+              readOnly: true
+            - name: traefik-logs
+              mountPath: /var/log/traefik
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: purple-wolf-relay-config
+        - name: traefik-logs
+          emptyDir: {}

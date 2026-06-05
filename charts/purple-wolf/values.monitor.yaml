@@ -1,0 +1,6 @@
+middlewares:
+  enabled: true
+  monitor:
+    enabled: true
+  enforce:
+    enabled: false

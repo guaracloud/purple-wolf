@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: purple-wolf-relay
+  labels:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+  ports:
+    - name: admin
+      port: 9090
+      targetPort: admin
+      protocol: TCP

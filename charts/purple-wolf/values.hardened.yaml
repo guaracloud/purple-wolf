@@ -1,0 +1,15 @@
+relay:
+  networkPolicy:
+    enabled: true
+  serviceMonitor:
+    enabled: true
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

@@ -1,0 +1,18 @@
+sources:
+  - type: log_tail
+    path: /shared/traefik.log
+    from_beginning: true
+
+subscribers:
+  - id: demo
+    url: http://subscriber:8090/webhook
+    secret_env: DEMO_HMAC_SECRET
+    timeout_ms: 5000
+    retry:
+      max_attempts: 3
+      base_delay_ms: 100
+      max_delay_ms: 1000
+
+relay:
+  instance_id: relay-demo
+  subscriber_queue: 1024

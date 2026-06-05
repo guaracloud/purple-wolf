@@ -1,0 +1,142 @@
+nameOverride: ""
+fullnameOverride: ""
+
+commonLabels: {}
+
+relay:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/guaracloud/purple-wolf-relay
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  imagePullSecrets: []
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+
+  adminAddr: "0.0.0.0:9090"
+
+  config:
+    sources:
+      - type: log_tail
+        path: /var/log/traefik/access.log
+        from_beginning: false
+    enrichments: []
+    subscribers: []
+    relay:
+      subscriber_queue: 10000
+
+  extraEnv: []
+
+  secret:
+    create: false
+    name: ""
+    stringData: {}
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: admin
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    failureThreshold: 3
+
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: admin
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 6
+
+  service:
+    type: ClusterIP
+    port: 9090
+    annotations: {}
+
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+  networkPolicy:
+    enabled: false
+    ingressNamespaceSelector: {}
+    ingressPodSelector: {}
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 0
+
+  volumes:
+    traefikLogs:
+      emptyDir: {}
+
+wasmAsset:
+  enabled: false
+  image:
+    repository: ghcr.io/guaracloud/purple-wolf-wasm
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  mountPath: /plugins-local/src/github.com/guaracloud/purple-wolf
+
+middlewares:
+  enabled: true
+  namespace: ""
+  monitor:
+    enabled: true
+    name: purple-wolf-monitor
+    labels: {}
+    groups:
+      injection: { enabled: true, mode: enforce }
+      signatures: { enabled: true, mode: enforce }
+      structural: { enabled: true, mode: monitor }
+      reputation: { enabled: true, mode: monitor }
+  enforce:
+    enabled: true
+    name: purple-wolf-enforce
+    failMode: failOpen
+    labels: {}
+    groups:
+      injection: { enabled: true, mode: enforce }
+      signatures: { enabled: true, mode: enforce }
+      structural: { enabled: true, mode: enforce }
+      reputation: { enabled: true, mode: enforce }
+    reputation:
+      perSecond: 100
+      denyList: []
+    xff:
+      trustedHops: 1

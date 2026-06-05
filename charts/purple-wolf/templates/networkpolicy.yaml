@@ -1,0 +1,27 @@
+{{- if and .Values.relay.enabled .Values.relay.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "purple-wolf.fullname" . }}-relay
+  labels:
+    {{- include "purple-wolf.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "purple-wolf.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: webhook-relay
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.relay.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.relay.networkPolicy.ingressPodSelector | nindent 12 }}
+      ports:
+        - port: admin
+          protocol: TCP
+  egress:
+    - {}
+{{- end }}

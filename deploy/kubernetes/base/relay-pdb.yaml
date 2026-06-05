@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: purple-wolf-relay
+  labels:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: purple-wolf
+      app.kubernetes.io/component: webhook-relay

@@ -1,0 +1,14 @@
+displayName: purple-wolf
+type: middleware
+runtime: wasm
+import: github.com/guaracloud/purple-wolf
+summary: |
+  Hybrid Web Application Firewall: libinjection, literal signatures,
+  structural checks, and per-IP reputation controls.
+
+testData:
+  mode: monitor
+  groups:
+    injection:
+      enabled: true
+      mode: enforce

@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: purple-wolf-relay
+  labels:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: purple-wolf
+      app.kubernetes.io/component: webhook-relay
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: admin
+          protocol: TCP
+  egress:
+    - {}

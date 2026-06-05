@@ -1,0 +1,8 @@
+purple-wolf has been rendered.
+
+Relay admin service:
+  {{ include "purple-wolf.fullname" . }}-relay.{{ .Release.Namespace }}.svc:{{ .Values.relay.service.port }}
+
+The chart renders monitor/enforce Middleware examples but does not attach them
+to any IngressRoute. Attach the monitor Middleware first, tune labels and false
+positives, then opt in to enforce mode explicitly.

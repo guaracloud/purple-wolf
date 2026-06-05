@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: purple-wolf-relay
+  labels:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: purple-wolf
+      app.kubernetes.io/component: webhook-relay
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: 30s

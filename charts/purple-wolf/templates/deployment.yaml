@@ -1,0 +1,99 @@
+{{- if .Values.relay.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "purple-wolf.fullname" . }}-relay
+  labels:
+    {{- include "purple-wolf.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-relay
+spec:
+  replicas: {{ .Values.relay.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      {{- include "purple-wolf.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: webhook-relay
+  template:
+    metadata:
+      labels:
+        {{- include "purple-wolf.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook-relay
+        {{- with .Values.relay.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.relay.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "purple-wolf.serviceAccountName" . }}
+      {{- with .Values.relay.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.relay.podSecurityContext | nindent 8 }}
+      {{- if .Values.wasmAsset.enabled }}
+      initContainers:
+        - name: stage-wasm-plugin
+          image: {{ include "purple-wolf.image" (dict "image" .Values.wasmAsset.image "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.wasmAsset.image.pullPolicy }}
+          command: ["sh", "-c", "cp /purple_wolf_traefik.wasm /wasm/plugin.wasm"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: wasm-plugin
+              mountPath: /wasm
+      {{- end }}
+      containers:
+        - name: relay
+          image: {{ include "purple-wolf.image" (dict "image" .Values.relay.image "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.relay.image.pullPolicy }}
+          args:
+            - --config=/etc/purple-wolf-relay/relay.yaml
+            - --admin-addr={{ .Values.relay.adminAddr }}
+          ports:
+            - name: admin
+              containerPort: 9090
+              protocol: TCP
+          {{- with .Values.relay.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.relay.resources | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.relay.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.relay.livenessProbe | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.relay.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/purple-wolf-relay
+              readOnly: true
+            - name: traefik-logs
+              mountPath: /var/log/traefik
+              readOnly: true
+            {{- if .Values.wasmAsset.enabled }}
+            - name: wasm-plugin
+              mountPath: {{ .Values.wasmAsset.mountPath }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "purple-wolf.fullname" . }}-relay
+        - name: traefik-logs
+          {{- toYaml .Values.relay.volumes.traefikLogs | nindent 10 }}
+        {{- if .Values.wasmAsset.enabled }}
+        - name: wasm-plugin
+          emptyDir: {}
+        {{- end }}
+{{- end }}

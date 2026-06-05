@@ -1,0 +1,12 @@
+{{- if .Values.relay.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "purple-wolf.fullname" . }}-relay
+  labels:
+    {{- include "purple-wolf.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-relay
+data:
+  relay.yaml: |
+    {{- toYaml .Values.relay.config | nindent 4 }}
+{{- end }}

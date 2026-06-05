@@ -1,0 +1,28 @@
+http:
+  routers:
+    demo:
+      rule: "PathPrefix(`/`)"
+      entryPoints: [web]
+      service: echo
+      middlewares: [strict-waf]
+
+  services:
+    echo:
+      loadBalancer:
+        servers:
+          - url: "http://upstream:8000"
+
+  middlewares:
+    strict-waf:
+      plugin:
+        purpleWolf:
+          mode: enforce
+          labels:
+            tenant: demo
+            service: local-compose
+            environment: dev
+          groups:
+            injection: { enabled: true, mode: enforce }
+            signatures: { enabled: true, mode: enforce }
+            structural: { enabled: true, mode: monitor }
+            reputation: { enabled: true, mode: monitor }

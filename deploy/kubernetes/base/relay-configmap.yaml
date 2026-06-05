@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: purple-wolf-relay-config
+  labels:
+    app.kubernetes.io/name: purple-wolf
+    app.kubernetes.io/component: webhook-relay
+data:
+  relay.yaml: |
+    sources:
+      - type: log_tail
+        path: /var/log/traefik/access.log
+        from_beginning: false
+    enrichments: []
+    subscribers: []
+    relay:
+      subscriber_queue: 10000

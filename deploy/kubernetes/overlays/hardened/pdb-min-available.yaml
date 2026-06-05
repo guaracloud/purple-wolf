@@ -1,0 +1,6 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: purple-wolf-relay
+spec:
+  minAvailable: 1

@@ -44,46 +44,62 @@ internet → Traefik (TLS, routing, your existing setup)
   [README](crates/purple-wolf-relay/README.md) and the
   [webhook protocol spec](docs/webhook-protocol.md).
 
-## Quick start (Traefik)
+## Quick start
 
-1. **Get the plugin binary.** Download `purple-wolf.wasm` from the [latest
-   GitHub Release](https://github.com/guaracloud/purple-wolf/releases),
-   or build it yourself:
-   ```bash
-   WASI_SDK_PATH=/opt/wasi-sdk cargo build --release \
-     -p purple-wolf-traefik --target wasm32-wasip1
-   # artifact: target/wasm32-wasip1/release/purple_wolf_traefik.wasm
-   ```
+### Local demo
 
-2. **Install the plugin into Traefik** (one-time, platform level).
-   Place the file at `/plugins-local/src/github.com/guaracloud/purple-wolf/purple-wolf.wasm`
-   in your Traefik pods, and declare it in `traefik.yml`:
-   ```yaml
-   experimental:
-     localPlugins:
-       purpleWolf:
-         moduleName: github.com/guaracloud/purple-wolf
-   ```
+Run Traefik, the WASM plugin, a backend, the relay, and an HMAC-verifying
+subscriber:
 
-3. **Apply a Middleware** in your namespace. Start with monitor mode:
-   ```bash
-   kubectl apply -f examples/middleware-monitor.yaml
-   ```
-   See [`examples/`](examples/) for the full set:
-   - [`middleware-strict.yaml`](examples/middleware-strict.yaml) — block SQLi/XSS, log everything.
-   - [`middleware-monitor.yaml`](examples/middleware-monitor.yaml) — log-only rollout.
-   - [`middleware-routes.yaml`](examples/middleware-routes.yaml) — attaching different policies to different routes.
+```bash
+docker compose -f examples/demo/docker-compose.yml up --build
+```
 
-4. **Reference the Middleware** in your IngressRoute (`middlewares: [{ name: purple-wolf-monitor }]`).
+Then try the requests in [`examples/demo/README.md`](examples/demo/README.md).
 
-5. **Tune false positives for ~1 week**, then flip `mode: enforce` and let it
-   block.
+### Kubernetes install
 
-For the full per-field configuration reference, see
-[`docs/configuration.md`](docs/configuration.md). For a runnable
-end-to-end smoke test on a real Kubernetes cluster (WAF + relay +
-webhook subscriber in one Pod), see
-[`docs/homelab-test.md`](docs/homelab-test.md).
+Install the OCI Helm chart in monitor mode:
+
+```bash
+helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
+  --version <version> \
+  -f charts/purple-wolf/values.monitor.yaml
+```
+
+Kustomize users can start with:
+
+```bash
+kubectl apply -k deploy/kubernetes/overlays/monitor-mode
+```
+
+The chart and Kustomize overlays render monitor/enforce Middleware examples but
+do not attach them to any route. Attach `purple-wolf-monitor` to selected
+IngressRoutes first, review audit output, then opt in to enforce mode.
+
+### Verify release artifacts
+
+Before production use, verify checksums, Cosign signatures, SBOMs, image
+digests, and the release manifest:
+
+```bash
+gh release download <version> --repo guaracloud/purple-wolf --dir purple-wolf-release
+```
+
+Follow [`docs/release-verification.md`](docs/release-verification.md) and deploy
+digest-pinned image references from `release-manifest.json`.
+
+### Relay operation
+
+Run the relay when you want signed webhooks to a SIEM, Slack bridge, or tenant
+subscriber. See [`docs/operations.md`](docs/operations.md),
+[`docs/helm.md`](docs/helm.md), and
+[`docs/kubernetes-production.md`](docs/kubernetes-production.md).
+
+For the full per-field Middleware reference, see
+[`docs/configuration.md`](docs/configuration.md). Existing raw files under
+[`examples/`](examples/) remain educational examples; production users should
+prefer Helm or Kustomize.
 
 ## Benchmark — head-to-head with Coraza, on the same cluster
 
