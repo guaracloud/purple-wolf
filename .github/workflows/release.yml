@@ -125,8 +125,8 @@ jobs:
           chart="$(ls dist/purple-wolf-*.tgz)"
           syft "$chart" -o spdx-json=dist/purple-wolf-chart.spdx.json
           helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
-          helm push "$chart" "$CHART_REPOSITORY" | tee /tmp/purple-wolf-helm-push.txt
-          digest="$(grep -E '^Digest:' /tmp/purple-wolf-helm-push.txt | awk '{print $2}')"
+          helm push "$chart" "$CHART_REPOSITORY" 2>&1 | tee /tmp/purple-wolf-helm-push.txt
+          digest="$(awk '/^Digest:/ {print $2; exit}' /tmp/purple-wolf-helm-push.txt)"
           test -n "$digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
