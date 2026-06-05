@@ -162,18 +162,6 @@ jobs:
         with:
           files: dist/*
 
-      - name: Verify crates.io publish would succeed
-        run: |
-          cargo publish -p purple-wolf-core --dry-run
-          cargo publish -p purple-wolf-relay --dry-run
-
-      - name: Publish crates to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo publish -p purple-wolf-core
-          cargo publish -p purple-wolf-relay
-
   publish-relay-macos:
     needs: publish-and-sign
     runs-on: macos-latest
