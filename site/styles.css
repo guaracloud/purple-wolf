@@ -497,6 +497,25 @@ a:focus-visible {
   .command-card {
     padding: var(--space-md);
   }
+
+  .command-code {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .command-code pre {
+    width: 100%;
+    padding-right: var(--space-lg);
+  }
+
+  .copy-button {
+    position: static;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: var(--space-xs);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
