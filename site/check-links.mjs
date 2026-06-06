@@ -20,6 +20,11 @@ for (const match of html.matchAll(linkPattern)) {
     continue;
   }
 
+  if (target.startsWith("../")) {
+    failures.push(`${target} (escapes the deployed Pages artifact)`);
+    continue;
+  }
+
   const cleanTarget = target.split("#")[0].split("?")[0];
   const absoluteTarget = resolve(root, "site", cleanTarget);
 
