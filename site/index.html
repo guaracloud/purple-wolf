@@ -10,7 +10,7 @@
     <title>Purple Wolf - A fast, verifiable WAF for Traefik</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@500;600;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Recursive+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@500;600;700&amp;family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&amp;family=Recursive+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
@@ -40,7 +40,7 @@
             artifacts, publishes SBOMs and digest-pinned images, and supports a
             monitor-first Kubernetes rollout through Helm and Kustomize.
           </p>
-          <div class="hero-actions" aria-label="Primary actions">
+          <div class="hero-actions" role="group" aria-label="Primary actions">
             <a class="button button-primary" href="#demo">Try the demo</a>
             <a class="button button-secondary" href="https://github.com/guaracloud/purple-wolf/releases/tag/v0.3.0">View v0.3 release</a>
             <a class="button button-ghost" href="#helm">Install with Helm</a>
@@ -54,8 +54,8 @@
           </ul>
         </div>
 
-        <div class="request-map" aria-label="Request path through Purple Wolf">
-          <p class="map-label">request path</p>
+        <figure class="request-map" aria-labelledby="request-map-title">
+          <figcaption id="request-map-title" class="map-label">request path</figcaption>
           <div class="map-row">
             <div class="map-node">Traefik</div>
             <div class="map-arrow" aria-hidden="true">-></div>
@@ -66,7 +66,7 @@
           <div class="map-branch" aria-hidden="true">|</div>
           <div class="map-node map-node-relay">Relay / SIEM</div>
           <p class="map-note">Inspect inline. Deliver signed audit events out of band.</p>
-        </div>
+        </figure>
       </section>
 
       <section class="audiences section" aria-labelledby="audiences-title">
@@ -186,13 +186,13 @@
           <h2 id="verify-title">Install by digest, not by hope.</h2>
           <p>Every public release includes a manifest, signatures, checksums, SBOMs, image digests, and the Helm chart digest.</p>
         </div>
-        <div class="verify-list" aria-label="Release verification checklist">
-          <span>release-manifest.json</span>
-          <span>Cosign signatures</span>
-          <span>SPDX SBOMs</span>
-          <span>GHCR image digests</span>
-          <span>Helm OCI digest</span>
-        </div>
+        <ul class="verify-list" aria-label="Release verification checklist">
+          <li>release-manifest.json</li>
+          <li>Cosign signatures</li>
+          <li>SPDX SBOMs</li>
+          <li>GHCR image digests</li>
+          <li>Helm OCI digest</li>
+        </ul>
         <a class="button button-secondary" href="../docs/release-verification.md">Open verification guide</a>
       </section>
 
