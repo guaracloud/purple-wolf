@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Purple Wolf is a fast, verifiable Web Application Firewall for Traefik, shipped as a WASM plugin with signed releases, SBOMs, Helm, and Kustomize packaging.">
+    <meta property="og:title" content="Purple Wolf - A fast, verifiable WAF for Traefik">
+    <meta property="og:description" content="Traefik WASM WAF with signed artifacts, SBOMs, benchmark evidence, and monitor-first Kubernetes rollout.">
+    <meta property="og:type" content="website">
+    <title>Purple Wolf - A fast, verifiable WAF for Traefik</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@500;600;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Recursive+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary navigation">
+        <a class="brand" href="./index.html" aria-label="Purple Wolf home">
+          <span class="brand-mark" aria-hidden="true">PW</span>
+          <span>Purple Wolf</span>
+        </a>
+        <div class="nav-links">
+          <a href="#benchmark">Benchmark</a>
+          <a href="#install">Install</a>
+          <a href="#verify">Verify</a>
+          <a href="https://github.com/guaracloud/purple-wolf">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero section">
+        <div class="hero-copy">
+          <p class="eyebrow">Traefik WASM WAF · v0.3 released</p>
+          <h1>A fast, verifiable WAF for Traefik.</h1>
+          <p class="hero-lede">
+            Purple Wolf runs as a Traefik WASM plugin, ships signed release
+            artifacts, publishes SBOMs and digest-pinned images, and supports a
+            monitor-first Kubernetes rollout through Helm and Kustomize.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button button-primary" href="#demo">Try the demo</a>
+            <a class="button button-secondary" href="https://github.com/guaracloud/purple-wolf/releases/tag/v0.3.0">View v0.3 release</a>
+            <a class="button button-ghost" href="#helm">Install with Helm</a>
+          </div>
+          <ul class="trust-row" aria-label="Release and deployment properties">
+            <li>Traefik WASM plugin</li>
+            <li>Signed artifacts</li>
+            <li>SPDX SBOMs</li>
+            <li>Helm OCI chart</li>
+            <li>Monitor-first rollout</li>
+          </ul>
+        </div>
+
+        <div class="request-map" aria-label="Request path through Purple Wolf">
+          <p class="map-label">request path</p>
+          <div class="map-row">
+            <div class="map-node">Traefik</div>
+            <div class="map-arrow" aria-hidden="true">-></div>
+            <div class="map-node map-node-strong">Purple Wolf WASM</div>
+            <div class="map-arrow" aria-hidden="true">-></div>
+            <div class="map-node">Backend</div>
+          </div>
+          <div class="map-branch" aria-hidden="true">|</div>
+          <div class="map-node map-node-relay">Relay / SIEM</div>
+          <p class="map-note">Inspect inline. Deliver signed audit events out of band.</p>
+        </div>
+      </section>
+
+      <section class="audiences section" aria-labelledby="audiences-title">
+        <div class="section-heading">
+          <p class="eyebrow">Built for rollout, not shelfware</p>
+          <h2 id="audiences-title">Three teams, one request path.</h2>
+        </div>
+        <div class="audience-grid">
+          <article class="audience audience-security">
+            <h3>Security engineers</h3>
+            <p>Threat boundaries, signed releases, SBOMs, and HMAC-signed relay events for SIEM or tenant webhook delivery.</p>
+            <a href="../THREAT_MODEL.md">Read the threat model</a>
+          </article>
+          <article class="audience audience-platform">
+            <h3>DevOps and Kubernetes operators</h3>
+            <p>Helm, Kustomize, hardened container defaults, digest-pinned images, and monitor-first rollout guidance.</p>
+            <a href="../docs/kubernetes-production.md">Open production notes</a>
+          </article>
+          <article class="audience audience-traefik">
+            <h3>Traefik users</h3>
+            <p>A WASM plugin that fits Traefik Middleware workflows, with a local demo and monitor/enforce examples.</p>
+            <a href="../examples/demo/README.md">Run the local demo</a>
+          </article>
+        </div>
+      </section>
+
+      <section id="benchmark" class="benchmark section" aria-labelledby="benchmark-title">
+        <div class="section-heading">
+          <p class="eyebrow">Benchmark snapshot</p>
+          <h2 id="benchmark-title">Low overhead, bounded claims.</h2>
+          <p>
+            Same Traefik http-wasm shape, same resource budget, same yardstick.
+            This is not a claim that Purple Wolf is better than every Coraza
+            deployment or every WAF mode.
+          </p>
+        </div>
+        <div class="metric-layout">
+          <article class="metric metric-primary">
+            <span class="metric-value">+0.1-0.2 ms</span>
+            <span class="metric-label">isolated p99 WAF overhead</span>
+          </article>
+          <article class="metric">
+            <span class="metric-value">~8,000 RPS</span>
+            <span class="metric-label">sustained under tested resources</span>
+          </article>
+          <article class="metric">
+            <span class="metric-value">80-96 MiB</span>
+            <span class="metric-label">memory band during soak</span>
+          </article>
+          <article class="metric comparison">
+            <span class="metric-value">14.55% vs 6.11%</span>
+            <span class="metric-label">detection in same-shape http-wasm comparison</span>
+          </article>
+        </div>
+        <a class="text-link" href="../docs/benchmark.md">Read the full methodology and caveats</a>
+      </section>
+
+      <section class="workflow section" aria-labelledby="workflow-title">
+        <div class="section-heading">
+          <p class="eyebrow">How it works</p>
+          <h2 id="workflow-title">Inline inspection, out-of-band audit delivery.</h2>
+        </div>
+        <div class="workflow-grid">
+          <div class="workflow-step">
+            <span>01</span>
+            <h3>Traefik receives the request</h3>
+            <p>Attach Purple Wolf Middleware to selected routes without changing your backend service.</p>
+          </div>
+          <div class="workflow-step">
+            <span>02</span>
+            <h3>The WASM plugin inspects</h3>
+            <p>Headers, URL, query parameters, and capped request bodies are evaluated in the request path.</p>
+          </div>
+          <div class="workflow-step">
+            <span>03</span>
+            <h3>The relay fans out audit events</h3>
+            <p>Run the relay when signed webhook delivery to SIEM, Slack bridges, or tenant subscribers is needed.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="install" class="install section" aria-labelledby="install-title">
+        <div class="section-heading">
+          <p class="eyebrow">Install paths</p>
+          <h2 id="install-title">Try locally, then roll out deliberately.</h2>
+        </div>
+        <div class="command-stack">
+          <article id="demo" class="command-card">
+            <div>
+              <h3>Local demo</h3>
+              <p>Traefik, Purple Wolf WASM, backend echo service, relay, and HMAC-verifying subscriber.</p>
+            </div>
+            <pre><code>docker compose -f examples/demo/docker-compose.yml up --build</code></pre>
+          </article>
+          <article id="helm" class="command-card">
+            <div>
+              <h3>Helm OCI chart</h3>
+              <p>Install monitor-mode examples without attaching them to production routes automatically.</p>
+            </div>
+            <pre><code>helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
+  --version 0.3.0 \
+  -f charts/purple-wolf/values.monitor.yaml</code></pre>
+          </article>
+          <article class="command-card">
+            <div>
+              <h3>Kustomize</h3>
+              <p>Start from the monitor-mode overlay and attach Middleware route by route.</p>
+            </div>
+            <pre><code>kubectl apply -k deploy/kubernetes/overlays/monitor-mode</code></pre>
+          </article>
+        </div>
+      </section>
+
+      <section id="verify" class="verify section" aria-labelledby="verify-title">
+        <div class="section-heading">
+          <p class="eyebrow">Verify before production</p>
+          <h2 id="verify-title">Install by digest, not by hope.</h2>
+          <p>Every public release includes a manifest, signatures, checksums, SBOMs, image digests, and the Helm chart digest.</p>
+        </div>
+        <div class="verify-list" aria-label="Release verification checklist">
+          <span>release-manifest.json</span>
+          <span>Cosign signatures</span>
+          <span>SPDX SBOMs</span>
+          <span>GHCR image digests</span>
+          <span>Helm OCI digest</span>
+        </div>
+        <a class="button button-secondary" href="../docs/release-verification.md">Open verification guide</a>
+      </section>
+
+      <section class="rollout section" aria-labelledby="rollout-title">
+        <div class="section-heading">
+          <p class="eyebrow">Rollout model</p>
+          <h2 id="rollout-title">Monitor first. Enforce deliberately.</h2>
+        </div>
+        <ol class="rollout-list">
+          <li>Install monitor-mode examples.</li>
+          <li>Attach <code>purple-wolf-monitor</code> to selected routes.</li>
+          <li>Inspect audit events and webhook output.</li>
+          <li>Tune policy and body limits.</li>
+          <li>Opt into enforce mode route by route.</li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div>
+        <strong>Purple Wolf</strong>
+        <p>Dual-licensed under MIT OR Apache-2.0.</p>
+      </div>
+      <nav aria-label="Footer links">
+        <a href="https://github.com/guaracloud/purple-wolf">GitHub</a>
+        <a href="https://github.com/guaracloud/purple-wolf/releases/tag/v0.3.0">v0.3.0 release</a>
+        <a href="../docs/configuration.md">Configuration</a>
+        <a href="../docs/benchmark.md">Benchmark</a>
+        <a href="../THREAT_MODEL.md">Threat model</a>
+      </nav>
+    </footer>
+    <script src="./script.js" defer></script>
+  </body>
+</html>
