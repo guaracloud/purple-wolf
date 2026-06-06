@@ -1,0 +1,172 @@
+{
+  "brandName": "Purple Wolf",
+  "tagline": "A fast, verifiable WAF for Traefik",
+  "source": "purple-wolf-logo-green-background.png",
+  "sourceMetadata": {
+    "width": 1254,
+    "height": 1254,
+    "format": "png",
+    "hasAlpha": false
+  },
+  "generatedAt": "2026-06-06T20:31:08.279Z",
+  "chromaKey": {
+    "sampledKey": {
+      "r": 46,
+      "g": 239,
+      "b": 2
+    },
+    "transparentPixels": 859205,
+    "edgePixels": 3156
+  },
+  "validation": {
+    "logoStats": {
+      "transparent": 304299,
+      "opaque": 712203,
+      "partial": 1106,
+      "transparentRatio": 0.299,
+      "partialRatio": 0.0011
+    }
+  },
+  "assets": [
+    {
+      "name": "logo-transparent.png",
+      "width": 971,
+      "height": 1048,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "logo-square-transparent.png",
+      "width": 1024,
+      "height": 1024,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "icon-transparent.png",
+      "width": 1024,
+      "height": 1024,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-16.png",
+      "width": 16,
+      "height": 16,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-32.png",
+      "width": 32,
+      "height": 32,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-48.png",
+      "width": 48,
+      "height": 48,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-96.png",
+      "width": 96,
+      "height": 96,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "apple-touch-icon.png",
+      "width": 180,
+      "height": 180,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "icon-192.png",
+      "width": 192,
+      "height": 192,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "icon-512.png",
+      "width": 512,
+      "height": 512,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-16.png",
+      "width": 16,
+      "height": 16,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-32.png",
+      "width": 32,
+      "height": 32,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-48.png",
+      "width": 48,
+      "height": 48,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-96.png",
+      "width": 96,
+      "height": 96,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-180.png",
+      "width": 180,
+      "height": 180,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-192.png",
+      "width": 192,
+      "height": 192,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "favicon-branded-512.png",
+      "width": 512,
+      "height": 512,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "og-image.png",
+      "width": 1200,
+      "height": 630,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "logo-on-white.png",
+      "width": 1024,
+      "height": 1024,
+      "format": "png",
+      "hasAlpha": true
+    },
+    {
+      "name": "logo-on-dark.png",
+      "width": 1024,
+      "height": 1024,
+      "format": "png",
+      "hasAlpha": true
+    }
+  ]
+}

@@ -6,8 +6,20 @@
     <meta name="description" content="Purple Wolf is a fast, verifiable Web Application Firewall for Traefik, shipped as a WASM plugin with signed releases, SBOMs, Helm, and Kustomize packaging.">
     <meta property="og:title" content="Purple Wolf - A fast, verifiable WAF for Traefik">
     <meta property="og:description" content="Traefik WASM WAF with signed artifacts, SBOMs, benchmark evidence, and monitor-first Kubernetes rollout.">
+    <meta property="og:image" content="./logos/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Purple Wolf logo and title card">
     <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Purple Wolf - A fast, verifiable WAF for Traefik">
+    <meta name="twitter:description" content="Traefik WASM WAF with signed artifacts, SBOMs, benchmark evidence, and monitor-first Kubernetes rollout.">
+    <meta name="twitter:image" content="./logos/og-image.png">
     <title>Purple Wolf - A fast, verifiable WAF for Traefik</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="./logos/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="./logos/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./logos/apple-touch-icon.png">
+    <link rel="preload" as="image" href="./logos/logo-square-transparent.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@500;600;700&amp;family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&amp;family=Recursive+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
@@ -18,7 +30,9 @@
     <header class="site-header">
       <nav class="nav" aria-label="Primary navigation">
         <a class="brand" href="./index.html" aria-label="Purple Wolf home">
-          <span class="brand-mark" aria-hidden="true">PW</span>
+          <span class="brand-mark" aria-hidden="true">
+            <img src="./logos/logo-square-transparent.png" alt="">
+          </span>
           <span>Purple Wolf</span>
         </a>
         <div class="nav-links">
@@ -54,18 +68,8 @@
           </ul>
         </div>
 
-        <figure class="request-map" aria-labelledby="request-map-title">
-          <figcaption id="request-map-title" class="map-label">request path</figcaption>
-          <div class="map-row">
-            <div class="map-node">Traefik</div>
-            <div class="map-arrow" aria-hidden="true">-></div>
-            <div class="map-node map-node-strong">Purple Wolf WASM</div>
-            <div class="map-arrow" aria-hidden="true">-></div>
-            <div class="map-node">Backend</div>
-          </div>
-          <div class="map-branch" aria-hidden="true">|</div>
-          <div class="map-node map-node-relay">Relay / SIEM</div>
-          <p class="map-note">Inspect inline. Deliver signed audit events out of band.</p>
+        <figure class="hero-logo-panel">
+          <img src="./logos/logo-square-transparent.png" alt="Purple Wolf shield logo" width="1024" height="1024">
         </figure>
       </section>
 
