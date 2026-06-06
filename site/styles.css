@@ -382,6 +382,41 @@ code {
   font-family: var(--font-code);
 }
 
+.command-code {
+  position: relative;
+  min-width: 0;
+}
+
+.command-code pre {
+  padding-right: clamp(88px, 18vw, 120px);
+}
+
+.copy-button {
+  position: absolute;
+  right: var(--space-sm);
+  top: var(--space-sm);
+  min-height: 34px;
+  border: 1px solid color-mix(in oklch, var(--surface), transparent 55%);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--surface), transparent 10%);
+  color: var(--ink);
+  font: 700 0.85rem var(--font-body);
+  cursor: pointer;
+}
+
+.copy-button:hover {
+  border-color: color-mix(in oklch, var(--purple), var(--surface) 40%);
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+
+.copy-button:focus-visible,
+.button:focus-visible,
+a:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--purple), white 35%);
+  outline-offset: 3px;
+}
+
 .rollout-list {
   display: grid;
   gap: var(--space-sm);

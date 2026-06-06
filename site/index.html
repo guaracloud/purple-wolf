@@ -159,23 +159,32 @@
               <h3>Local demo</h3>
               <p>Traefik, Purple Wolf WASM, backend echo service, relay, and HMAC-verifying subscriber.</p>
             </div>
-            <pre><code>docker compose -f examples/demo/docker-compose.yml up --build</code></pre>
+            <div class="command-code">
+              <button class="copy-button" type="button">Copy</button>
+              <pre><code>docker compose -f examples/demo/docker-compose.yml up --build</code></pre>
+            </div>
           </article>
           <article id="helm" class="command-card">
             <div>
               <h3>Helm OCI chart</h3>
               <p>Install monitor-mode examples without attaching them to production routes automatically.</p>
             </div>
-            <pre><code>helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
+            <div class="command-code">
+              <button class="copy-button" type="button">Copy</button>
+              <pre><code>helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
   --version 0.3.0 \
   -f charts/purple-wolf/values.monitor.yaml</code></pre>
+            </div>
           </article>
           <article class="command-card">
             <div>
               <h3>Kustomize</h3>
               <p>Start from the monitor-mode overlay and attach Middleware route by route.</p>
             </div>
-            <pre><code>kubectl apply -k deploy/kubernetes/overlays/monitor-mode</code></pre>
+            <div class="command-code">
+              <button class="copy-button" type="button">Copy</button>
+              <pre><code>kubectl apply -k deploy/kubernetes/overlays/monitor-mode</code></pre>
+            </div>
           </article>
         </div>
       </section>
