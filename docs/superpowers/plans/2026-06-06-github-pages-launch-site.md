@@ -807,7 +807,8 @@ Run:
 test -f site/styles.css
 grep -q "oklch" site/styles.css
 grep -q "@media (max-width: 900px)" site/styles.css
-grep -qv "background-clip: text" site/styles.css
+grep -q "@media (max-width: 640px)" site/styles.css
+! grep -q "background-clip: text" site/styles.css
 ```
 
 Expected: all commands exit with status 0.
