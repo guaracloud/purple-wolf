@@ -189,34 +189,36 @@
         </div>
       </section>
 
-      <section id="verify" class="verify section" aria-labelledby="verify-title">
-        <div class="section-heading">
-          <p class="eyebrow">Verify before production</p>
-          <h2 id="verify-title">Install by digest, not by hope.</h2>
-          <p>Every public release includes a manifest, signatures, checksums, SBOMs, image digests, and the Helm chart digest.</p>
+      <section class="production-pair section" aria-label="Production verification and rollout">
+        <div id="verify" class="verify production-panel" aria-labelledby="verify-title">
+          <div class="section-heading">
+            <p class="eyebrow">Verify before production</p>
+            <h2 id="verify-title">Install by digest, not by hope.</h2>
+            <p>Every public release includes a manifest, signatures, checksums, SBOMs, image digests, and the Helm chart digest.</p>
+          </div>
+          <ul class="verify-list" aria-label="Release verification checklist">
+            <li>release-manifest.json</li>
+            <li>Cosign signatures</li>
+            <li>SPDX SBOMs</li>
+            <li>GHCR image digests</li>
+            <li>Helm OCI digest</li>
+          </ul>
+          <a class="button button-secondary" href="../docs/release-verification.md">Open verification guide</a>
         </div>
-        <ul class="verify-list" aria-label="Release verification checklist">
-          <li>release-manifest.json</li>
-          <li>Cosign signatures</li>
-          <li>SPDX SBOMs</li>
-          <li>GHCR image digests</li>
-          <li>Helm OCI digest</li>
-        </ul>
-        <a class="button button-secondary" href="../docs/release-verification.md">Open verification guide</a>
-      </section>
 
-      <section class="rollout section" aria-labelledby="rollout-title">
-        <div class="section-heading">
-          <p class="eyebrow">Rollout model</p>
-          <h2 id="rollout-title">Monitor first. Enforce deliberately.</h2>
+        <div class="rollout production-panel" aria-labelledby="rollout-title">
+          <div class="section-heading">
+            <p class="eyebrow">Rollout model</p>
+            <h2 id="rollout-title">Monitor first. Enforce deliberately.</h2>
+          </div>
+          <ol class="rollout-list">
+            <li>Install monitor-mode examples.</li>
+            <li>Attach <code>purple-wolf-monitor</code> to selected routes.</li>
+            <li>Inspect audit events and webhook output.</li>
+            <li>Tune policy and body limits.</li>
+            <li>Opt into enforce mode route by route.</li>
+          </ol>
         </div>
-        <ol class="rollout-list">
-          <li>Install monitor-mode examples.</li>
-          <li>Attach <code>purple-wolf-monitor</code> to selected routes.</li>
-          <li>Inspect audit events and webhook output.</li>
-          <li>Tune policy and body limits.</li>
-          <li>Opt into enforce mode route by route.</li>
-        </ol>
       </section>
     </main>
 

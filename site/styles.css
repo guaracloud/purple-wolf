@@ -417,10 +417,34 @@ a:focus-visible {
   outline-offset: 3px;
 }
 
+.production-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.92fr);
+  align-items: start;
+  gap: clamp(36px, 7vw, 96px);
+}
+
+.production-panel {
+  min-width: 0;
+}
+
+.production-panel .section-heading {
+  max-width: 620px;
+}
+
+.production-panel h2 {
+  font-size: clamp(2.5rem, 4.7vw, 5.25rem);
+}
+
+.production-panel .button {
+  margin-top: var(--space-lg);
+}
+
 .rollout-list {
   display: grid;
   gap: var(--space-sm);
   max-width: 760px;
+  margin: var(--space-xl) 0 0;
   padding-left: 1.4rem;
   color: var(--ink-muted);
 }
@@ -453,7 +477,8 @@ a:focus-visible {
 
   .audience-grid,
   .metric-layout,
-  .workflow-grid {
+  .workflow-grid,
+  .production-pair {
     grid-template-columns: 1fr;
   }
 
