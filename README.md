@@ -2,10 +2,11 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.3 in development (audit labels + webhook relay). See
+**Status:** v0.3 released (audit labels, webhook relay, signed release
+artifacts, SBOMs, Helm OCI chart, and Kubernetes packaging). See
 [THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed
 to catch, and [docs/configuration.md](docs/configuration.md) for the
-Middleware config reference. The new webhook protocol contract lives in
+Middleware config reference. The webhook protocol contract lives in
 [docs/webhook-protocol.md](docs/webhook-protocol.md).
 
 ## What it does
