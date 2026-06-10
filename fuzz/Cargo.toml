@@ -10,10 +10,23 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 purple-wolf-core = { path = "../crates/purple-wolf-core" }
+purple-wolf-relay = { path = "../crates/purple-wolf-relay" }
 
 [[bin]]
 name = "request_parser"
 path = "fuzz_targets/request_parser.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "client_ip"
+path = "fuzz_targets/client_ip.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "relay_parser"
+path = "fuzz_targets/relay_parser.rs"
 test = false
 doc  = false
 

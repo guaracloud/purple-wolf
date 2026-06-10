@@ -81,7 +81,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           cd fuzz
-          for t in request_parser injection_inspect signatures_inspect policy_decide; do
+          for t in request_parser injection_inspect signatures_inspect policy_decide client_ip relay_parser; do
             cargo +nightly fuzz run "$t" -- -max_total_time=30
           done
 

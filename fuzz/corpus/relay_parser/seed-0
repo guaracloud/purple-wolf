@@ -1,0 +1,1 @@
+time="2026-06-09T12:00:00Z" level=info msg="purple-wolf: {\"host\":\"x\",\"action\":\"block\",\"blocked_rule\":\"injection/sqli\",\"would_block_rules\":[]}"
