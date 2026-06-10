@@ -43,12 +43,23 @@ pub struct RelayConfig {
     /// drops events for THAT subscriber, never backpressures the fan-out.
     #[serde(default = "default_subscriber_queue")]
     pub subscriber_queue: usize,
+    /// Optional bearer-token guard for the admin surface (/metrics, /readyz,
+    /// /version; /healthz stays open for liveness probes). When unset the
+    /// admin surface is open — the v0.3 default — and the relay logs a
+    /// startup warning. The token is referenced indirectly so it never sits
+    /// in the config file: exactly one of `admin_token_env` / `admin_token_file`.
+    #[serde(default)]
+    pub admin_token_env: Option<String>,
+    #[serde(default)]
+    pub admin_token_file: Option<std::path::PathBuf>,
 }
 impl Default for RelayConfig {
     fn default() -> Self {
         Self {
             instance_id: None,
             subscriber_queue: default_subscriber_queue(),
+            admin_token_env: None,
+            admin_token_file: None,
         }
     }
 }
@@ -246,6 +257,40 @@ pub struct Resolved {
     /// Stable identifier for THIS relay instance (resolved from
     /// `relay.instance_id` or the OS hostname).
     pub instance_id: String,
+    /// Resolved admin bearer token, or `None` when the admin surface is open.
+    pub admin_token: Option<zeroize::Zeroizing<String>>,
+}
+
+/// Resolve the optional admin bearer token from its env/file reference.
+/// Mirrors the subscriber-secret rules: at most one of the two references,
+/// non-empty when present. `None` means the admin surface is left open.
+fn resolve_admin_token(
+    relay: &RelayConfig,
+) -> anyhow::Result<Option<zeroize::Zeroizing<String>>> {
+    match (&relay.admin_token_env, &relay.admin_token_file) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => {
+            anyhow::bail!("relay: only one of admin_token_env / admin_token_file may be set")
+        }
+        (Some(env_name), None) => {
+            let v = std::env::var(env_name).map_err(|_| {
+                anyhow::anyhow!("relay: admin_token_env {env_name:?} is not set")
+            })?;
+            if v.is_empty() {
+                anyhow::bail!("relay: admin_token_env {env_name:?} is empty");
+            }
+            Ok(Some(zeroize::Zeroizing::new(v)))
+        }
+        (None, Some(path)) => {
+            let s = std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("relay: reading admin_token_file {}: {e}", path.display()))?;
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                anyhow::bail!("relay: admin_token_file {} is empty", path.display());
+            }
+            Ok(Some(zeroize::Zeroizing::new(trimmed)))
+        }
+    }
 }
 
 /// Validate cross-field invariants and resolve secret references.
@@ -366,10 +411,13 @@ pub fn validate(cfg: &Config) -> anyhow::Result<Resolved> {
         })
         .unwrap_or_else(|| "purple-wolf-relay".to_string());
 
+    let admin_token = resolve_admin_token(&cfg.relay)?;
+
     Ok(Resolved {
         raw: cfg.clone(),
         subscriber_secrets,
         instance_id,
+        admin_token,
     })
 }
 
@@ -412,6 +460,45 @@ mod tests {
     fn rejects_unknown_top_level_field() {
         let err = load_from_str("sources: []\nsubscribers: []\nbogus: true").unwrap_err();
         assert!(err.to_string().contains("bogus"), "err: {err}");
+    }
+
+    #[test]
+    fn admin_token_defaults_to_none_open() {
+        let relay = RelayConfig::default();
+        assert!(resolve_admin_token(&relay).unwrap().is_none());
+    }
+
+    #[test]
+    fn admin_token_resolves_from_env() {
+        std::env::set_var("TEST_ADMIN_TOKEN_RESOLVES", "tok-123");
+        let relay = RelayConfig {
+            admin_token_env: Some("TEST_ADMIN_TOKEN_RESOLVES".into()),
+            ..RelayConfig::default()
+        };
+        let resolved = resolve_admin_token(&relay).unwrap();
+        assert_eq!(resolved.as_deref().map(String::as_str), Some("tok-123"));
+        std::env::remove_var("TEST_ADMIN_TOKEN_RESOLVES");
+    }
+
+    #[test]
+    fn admin_token_rejects_both_references() {
+        let relay = RelayConfig {
+            admin_token_env: Some("X".into()),
+            admin_token_file: Some("/tmp/x".into()),
+            ..RelayConfig::default()
+        };
+        let err = resolve_admin_token(&relay).unwrap_err();
+        assert!(err.to_string().contains("only one of"), "err: {err}");
+    }
+
+    #[test]
+    fn admin_token_rejects_missing_env() {
+        let relay = RelayConfig {
+            admin_token_env: Some("TEST_ADMIN_TOKEN_DEFINITELY_UNSET_XYZ".into()),
+            ..RelayConfig::default()
+        };
+        let err = resolve_admin_token(&relay).unwrap_err();
+        assert!(err.to_string().contains("is not set"), "err: {err}");
     }
 
     #[test]

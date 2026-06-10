@@ -12,11 +12,41 @@
 //! setting `cache_ttl_s: 0`.
 
 use async_trait::async_trait;
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::Enricher;
+
+/// Characters we percent-encode when substituting a label value into the
+/// enricher URL template. We start from controls and add every byte that is
+/// structurally significant in a URL — path/query/fragment/authority
+/// delimiters and the percent sign itself — so the substituted value can
+/// only ever be an opaque path *component*. This prevents an unusual label
+/// value (`../../admin`, `evil.com/?`, `@host`) from traversing the path,
+/// opening a query/fragment, or altering the authority (SSRF defense in
+/// depth: today label values are operator-set, but encoding makes the
+/// invariant hold regardless of their charset).
+const URL_VALUE_ENCODE: &AsciiSet = &CONTROLS
+    .add(b'%')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'?')
+    .add(b'#')
+    .add(b'&')
+    .add(b'=')
+    .add(b'@')
+    .add(b':')
+    .add(b' ')
+    .add(b'.');
+
+/// Substitute `value` into `template`'s `{value}` placeholder, percent-
+/// encoding the value so it cannot change the URL's structure or authority.
+fn build_enrich_url(template: &str, value: &str) -> String {
+    let encoded = utf8_percent_encode(value, URL_VALUE_ENCODE).to_string();
+    template.replace("{value}", &encoded)
+}
 
 pub struct HttpEnricher {
     on_label: String,
@@ -99,7 +129,7 @@ impl Enricher for HttpEnricher {
             }
         }
 
-        let url = self.url_template.replace("{value}", &value);
+        let url = build_enrich_url(&self.url_template, &value);
         let fut = self.client.get(&url).send();
         let response = match tokio::time::timeout(self.timeout, fut).await {
             Ok(Ok(r)) => r,
@@ -237,6 +267,32 @@ mod tests {
             .enrich(&mut labels, Duration::from_millis(500))
             .await;
         assert_eq!(labels.len(), 1);
+    }
+
+    #[test]
+    fn substituted_value_is_percent_encoded_against_ssrf() {
+        // SSRF/path-traversal invariant: the {value} substitution must be
+        // percent-encoded so an unusual label value can only ever be a path
+        // *component*, never alter the path structure or the authority. A
+        // value like `../../admin` or `evil.com/?` must not change the host
+        // or escape the templated path segment.
+        let url = build_enrich_url("https://catalog.internal/tenants/{value}/labels", "../../admin");
+        // Both slashes AND dots are encoded, so `..` cannot act as a parent-
+        // directory traversal segment — the value is a single opaque component.
+        assert_eq!(
+            url, "https://catalog.internal/tenants/%2E%2E%2F%2E%2E%2Fadmin/labels",
+            "slashes and dots in the value must be encoded, not structural"
+        );
+
+        let url2 = build_enrich_url("https://catalog.internal/{value}", "evil.com/x?a=b#c");
+        assert!(
+            url2.starts_with("https://catalog.internal/"),
+            "host must be unchanged: {url2}"
+        );
+        assert!(
+            !url2.contains("evil.com/x?") && !url2.contains('#'),
+            "URL-significant chars must be encoded: {url2}"
+        );
     }
 
     #[tokio::test]

@@ -56,9 +56,24 @@ pub async fn run(opts: RunOpts) -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("admin_addr {:?}: {e}", opts.admin_addr))?;
 
+    // Extract the admin token before `resolved` is moved into the pipeline.
+    // `None` leaves the admin surface open — warn so it's a conscious choice.
+    let admin_token = resolved
+        .admin_token
+        .as_ref()
+        .map(|t| std::sync::Arc::new(t.to_string()));
+    if admin_token.is_none() {
+        tracing::warn!(
+            "admin surface ({admin_addr}) has no auth token (set relay.admin_token_env / \
+             admin_token_file, or bind to an internal network / front with an authenticated \
+             proxy); /metrics, /readyz, /version are reachable by anyone who can connect"
+        );
+    }
+
     let admin_handle = tokio::spawn(admin::serve(
         admin_addr,
         metrics.clone(),
+        admin_token,
         shutdown_tx.subscribe(),
     ));
     let pipeline_handle = tokio::spawn(pipeline::run(
