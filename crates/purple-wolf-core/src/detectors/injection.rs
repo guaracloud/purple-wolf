@@ -12,8 +12,10 @@ impl Detector for InjectionDetector {
 
     fn inspect(&self, req: &Request) -> Vec<Verdict> {
         let mut verdicts = Vec::new();
+        let mut sqli_found = false;
         for field in req.inspectable_fields() {
             if ffi::is_sqli(field) {
+                sqli_found = true;
                 verdicts.push(Verdict {
                     group: Group::Injection,
                     rule: "sqli",
@@ -30,8 +32,58 @@ impl Detector for InjectionDetector {
                 });
             }
         }
+
+        // User-Agent suffix probe (documented round-2 gap). libinjection
+        // fingerprints `Mozilla/5.0 1 OR 1=1` as a User-Agent *string* and
+        // misses the trailing SQL. Re-probe the UA's suffix — the text after
+        // the first ASCII space and after the last `)` — so the isolated SQL
+        // tail reaches the tokenizer without the UA-shaped prefix steering
+        // the verdict. Only runs when no SQLi was found above, which also
+        // dedupes: a UA whose whole value already flagged is not re-counted.
+        if !sqli_found {
+            if let Some(ua) = req.user_agent() {
+                for cand in ua_suffix_candidates(ua) {
+                    if ffi::is_sqli(cand.as_bytes()) {
+                        verdicts.push(Verdict {
+                            group: Group::Injection,
+                            rule: "sqli",
+                            severity: Severity::Critical,
+                            detail: format!(
+                                "SQLi in User-Agent suffix: {}",
+                                truncate_bytes(cand.as_bytes())
+                            ),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
         verdicts
     }
+}
+
+/// Candidate suffixes of a User-Agent value to re-probe for SQLi, longest
+/// first. Returns only substrings that differ from the whole value (the
+/// whole value was already probed in the main loop). A browser UA looks
+/// like `Mozilla/5.0 (platform) Engine/ver`, so the SQL an attacker appends
+/// lives after the first space or after the parenthesized platform block.
+fn ua_suffix_candidates(ua: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    // After the last ')': covers `…(X11; Linux) <sql>`.
+    if let Some(idx) = ua.rfind(')') {
+        let tail = ua[idx + 1..].trim();
+        if !tail.is_empty() && tail.len() < ua.len() {
+            out.push(tail);
+        }
+    }
+    // After the first ASCII space: covers `Mozilla/5.0 <sql>` (no parens).
+    if let Some(idx) = ua.find(' ') {
+        let tail = ua[idx + 1..].trim();
+        if !tail.is_empty() && tail.len() < ua.len() && !out.contains(&tail) {
+            out.push(tail);
+        }
+    }
+    out
 }
 
 /// Build a short, log-safe representation of an attacker-controlled byte
@@ -195,5 +247,90 @@ mod tests {
             v.iter().any(|x| x.rule == "sqli"),
             "percent-encoded cookie SQLi must be inspected; verdicts: {v:?}"
         );
+    }
+
+    // ── User-Agent SQLi suffix probe (Tier 2.10) ────────────────────────────
+
+    /// Documented round-2 gap: libinjection fingerprints
+    /// `Mozilla/5.0 1 OR 1=1` as a User-Agent *string* and does not flag the
+    /// trailing SQL. Re-probing the UA's suffix (after the prefix token /
+    /// last `)`) recovers the injection.
+    #[test]
+    fn flags_mozilla_prefixed_sqli_in_user_agent() {
+        let v = InjectionDetector.inspect(&req_with_header("User-Agent", "Mozilla/5.0 1 OR 1=1"));
+        assert!(
+            v.iter().any(|x| x.rule == "sqli"),
+            "Mozilla-prefixed UA SQLi must be detected via suffix probe; verdicts: {v:?}"
+        );
+    }
+
+    #[test]
+    fn flags_sqli_in_user_agent_after_paren() {
+        // Real browser UAs end in `)`; an attacker appending SQL after the
+        // parenthesized platform block is the common shape.
+        let v = InjectionDetector.inspect(&req_with_header(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) ' OR '1'='1",
+        ));
+        assert!(
+            v.iter().any(|x| x.rule == "sqli"),
+            "UA SQLi after the paren block must be detected; verdicts: {v:?}"
+        );
+    }
+
+    #[test]
+    fn benign_user_agent_does_not_false_positive() {
+        // A normal browser UA must not produce any verdict.
+        let v = InjectionDetector.inspect(&req_with_header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ));
+        assert!(v.is_empty(), "benign UA must not flag: {v:?}");
+    }
+
+    #[test]
+    fn user_agent_sqli_not_double_counted() {
+        // A UA whose whole value libinjection already flags must yield
+        // exactly one sqli verdict — the suffix probe must dedupe, not add
+        // a second verdict for the same field.
+        let v = InjectionDetector.inspect(&req_with_header("User-Agent", "' OR '1'='1"));
+        assert_eq!(
+            v.iter().filter(|x| x.rule == "sqli").count(),
+            1,
+            "UA SQLi must not be double-counted; verdicts: {v:?}"
+        );
+    }
+
+    #[test]
+    fn ua_suffix_candidates_derive_expected_tails() {
+        // After the first space.
+        assert_eq!(
+            super::ua_suffix_candidates("Mozilla/5.0 1 OR 1=1"),
+            vec!["1 OR 1=1"]
+        );
+        // After the last ')' (preferred, longest-first) and after first space.
+        assert_eq!(
+            super::ua_suffix_candidates("Mozilla/5.0 (X11; Linux) ' OR 1=1"),
+            vec!["' OR 1=1", "(X11; Linux) ' OR 1=1"]
+        );
+        // A single token (no space, no paren) yields no suffix candidate —
+        // it was already probed whole in the main loop.
+        assert!(super::ua_suffix_candidates("curl/8.4.0").is_empty());
+    }
+
+    #[test]
+    fn realistic_browser_user_agents_do_not_false_positive() {
+        // The suffix probe must not turn ordinary browser UAs into SQLi
+        // verdicts — the FPR guard for the new probe.
+        for ua in [
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+            "curl/8.4.0",
+            "PostmanRuntime/7.36.0",
+        ] {
+            let v = InjectionDetector.inspect(&req_with_header("User-Agent", ua));
+            assert!(v.is_empty(), "benign UA {ua:?} must not flag: {v:?}");
+        }
     }
 }

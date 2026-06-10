@@ -166,6 +166,13 @@ impl Request {
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
     }
+
+    /// The raw `User-Agent` header value, if present. Used by the injection
+    /// detector's UA suffix probe (libinjection fingerprints a browser-
+    /// prefixed UA as a UA string and misses trailing SQL).
+    pub fn user_agent(&self) -> Option<&str> {
+        self.header("user-agent")
+    }
 }
 
 /// Maximum number of percent-decode passes applied to a single field.
