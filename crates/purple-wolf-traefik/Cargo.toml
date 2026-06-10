@@ -10,7 +10,14 @@ readme.workspace = true
 publish     = false
 
 [lib]
-crate-type = ["cdylib"]
+# `cdylib` for the wasm guest export table; `rlib` so the native
+# `purple-wolf-validate` binary can link the config adapter.
+crate-type = ["cdylib", "rlib"]
+
+# Offline config validator for operator CI (native only; never built for wasm).
+[[bin]]
+name = "purple-wolf-validate"
+path = "src/bin/validate.rs"
 
 [dependencies]
 purple-wolf-core = { path = "../purple-wolf-core" }
