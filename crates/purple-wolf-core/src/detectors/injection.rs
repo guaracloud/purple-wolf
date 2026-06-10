@@ -154,8 +154,9 @@ mod tests {
         // Double-encoded `' OR '1'='1`. A single-pass decoder would inspect
         // the still-encoded `%27...` literal and miss it; decode-to-fixpoint
         // recovers the cleartext SQLi for libinjection.
-        let v = InjectionDetector
-            .inspect(&req_with_query("id=%2527%2520OR%2520%25271%2527%253D%25271"));
+        let v = InjectionDetector.inspect(&req_with_query(
+            "id=%2527%2520OR%2520%25271%2527%253D%25271",
+        ));
         assert!(
             v.iter().any(|x| x.rule == "sqli"),
             "double-encoded SQLi must be detected after fixpoint decode; verdicts: {v:?}"
@@ -168,7 +169,10 @@ mod tests {
         // `50%off` and not trip any injection verdict — decode-to-fixpoint
         // must not manufacture false positives from ordinary `%` content.
         let v = InjectionDetector.inspect(&req_with_query("discount=50%25off&items=2"));
-        assert!(v.is_empty(), "benign percent literal should not flag: {v:?}");
+        assert!(
+            v.is_empty(),
+            "benign percent literal should not flag: {v:?}"
+        );
     }
 
     // ── Header inspection (fix for v0.2 C-1) ────────────────────────────────

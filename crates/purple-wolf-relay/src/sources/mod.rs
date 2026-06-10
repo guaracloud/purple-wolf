@@ -1,8 +1,8 @@
 //! Source abstraction: a stable async trait that produces a stream of
 //! `RawEvent`s (one per audit-log line) for the parser to consume.
 //!
-//! Two source kinds for v0.3 (`log_tail`, `stdin`). The trait shape lets
-//! v0.4 add Kafka / Loki / Vector / NATS with no pipeline changes — a
+//! Two source kinds today (`log_tail`, `stdin`). The trait shape lets
+//! future Kafka / Loki / Vector / NATS sources land with no pipeline changes — a
 //! new source just needs to push `RawEvent`s onto the same mpsc.
 
 use async_trait::async_trait;

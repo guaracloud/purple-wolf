@@ -2,7 +2,7 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.4 released — a security & robustness hardening pass on top of
+**Status:** v0.4.1 released — a security & robustness hardening pass on top of
 v0.3 (audit labels, webhook relay, signed release artifacts, SBOMs, Helm OCI
 chart, and Kubernetes packaging). v0.4 adds an O(1) reputation limiter,
 percent-decode-to-fixpoint, an expanded signature pack, a User-Agent SQLi

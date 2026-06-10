@@ -7,7 +7,7 @@ name: publish-images
 # default branch) plus an immutable `:sha-<short>` per commit so
 # downstream deployments can pin if they need to.
 #
-# Release-tagged stable images (`:v0.3.0`, signed) come out of
+# Release-tagged stable images (`:v*`, signed) come out of
 # release.yml, which is gated by the `release` environment.
 on:
   push:

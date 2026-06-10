@@ -14,6 +14,10 @@ curl -fsS http://purple-wolf-relay:9090/metrics
 `/readyz` returns ready after the pipeline starts. Use `/healthz` for liveness
 and `/readyz` for rollout gating.
 
+If `relay.admin_token_env` or `relay.admin_token_file` is configured, `/metrics`
+and `/version` require `Authorization: Bearer <token>`. `/healthz` and
+`/readyz` intentionally stay unauthenticated so Kubernetes probes keep working.
+
 ## Metrics
 
 Scrape `/metrics` from the relay service. Watch:

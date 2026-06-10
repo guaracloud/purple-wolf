@@ -15,7 +15,7 @@
 //! re-emitted, and events written during the down period are
 //! delivered.
 //!
-//! For v0.4 we'll switch to inotify/FSEvents via `notify` to avoid the
+//! Future work can switch to inotify/FSEvents via `notify` to avoid the
 //! 100ms polling latency; the current poll is simple and matches the
 //! roughly-once-per-second cadence of real audit-line traffic.
 

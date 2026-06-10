@@ -276,7 +276,10 @@ mod tests {
         // *component*, never alter the path structure or the authority. A
         // value like `../../admin` or `evil.com/?` must not change the host
         // or escape the templated path segment.
-        let url = build_enrich_url("https://catalog.internal/tenants/{value}/labels", "../../admin");
+        let url = build_enrich_url(
+            "https://catalog.internal/tenants/{value}/labels",
+            "../../admin",
+        );
         // Both slashes AND dots are encoded, so `..` cannot act as a parent-
         // directory traversal segment — the value is a single opaque component.
         assert_eq!(

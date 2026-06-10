@@ -149,10 +149,7 @@ mod tests {
             ip(),
         );
         let v = StructuralDetector.inspect(&req);
-        assert!(
-            v.iter().any(|x| x.rule == "null_byte"),
-            "verdicts: {v:?}"
-        );
+        assert!(v.iter().any(|x| x.rule == "null_byte"), "verdicts: {v:?}");
     }
 
     #[test]
@@ -208,7 +205,8 @@ mod tests {
         );
         let v = StructuralDetector.inspect(&req);
         assert!(
-            !v.iter().any(|x| x.rule == "null_byte" || x.rule == "crlf_injection"),
+            !v.iter()
+                .any(|x| x.rule == "null_byte" || x.rule == "crlf_injection"),
             "benign request must not flag control-byte rules: {v:?}"
         );
     }

@@ -1,12 +1,12 @@
 //! Per-subscriber dead-letter queue (in-memory ring buffer).
 //!
-//! v0.3 keeps it simple: a `Mutex<VecDeque<Envelope>>` per subscriber
+//! The current implementation keeps it simple: a `Mutex<VecDeque<Envelope>>` per subscriber
 //! with a fixed capacity. On overflow we drop the OLDEST entry —
 //! preserving recent failures over ancient ones is more useful for
 //! debugging. A separate `overflow_count` counter records how many
 //! drops happened so operators can alert on it.
 //!
-//! v0.4 will add a SQLite-backed durable DLQ; the in-memory variant
+//! A SQLite-backed durable DLQ is future work; the in-memory variant
 //! stays as the default for low-volume deployments.
 
 use std::collections::VecDeque;
@@ -68,8 +68,7 @@ impl Dlq {
     }
 
     /// Read-only snapshot of the current contents. Useful for the
-    /// `GET /dlq/<subscriber>` admin endpoint without disturbing the
-    /// queue (v0.4 wires this; Task 19 stops at the data structure).
+    /// future admin endpoint without disturbing the queue.
     pub fn snapshot(&self) -> Vec<Envelope> {
         self.inner.lock().unwrap().queue.iter().cloned().collect()
     }

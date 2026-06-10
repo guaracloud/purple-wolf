@@ -145,7 +145,7 @@ jobs:
           docker compose down -v || true
 
   relay-integration:
-    # Full-stack v0.3 check: Traefik + WAF + relay + mock subscriber
+    # Full-stack check: Traefik + WAF + relay + mock subscriber
     # in docker-compose. Asserts that an audit event with operator
     # labels reaches the subscriber as a verified HMAC-signed
     # envelope. Catches regressions in the parser, sink, or signer.

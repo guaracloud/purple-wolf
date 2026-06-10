@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-10
+
+### Fixed
+
+- Keep relay `/readyz` unauthenticated even when optional admin bearer auth is
+  enabled, so Kubernetes readiness probes cannot make authenticated relay pods
+  permanently unready. `/metrics` and `/version` remain protected.
+- Apply rustfmt to the v0.4 hardening changes so the release commit satisfies
+  the CI `cargo fmt --all --check` gate.
+- Refresh release, chart, Kustomize, example, and verification references that
+  still pointed at v0.3/v0.4 after the v0.4.0 release.
+- Remove duplicate/stale configuration docs and update relay threat-model
+  language for the v0.4+ admin-auth reality.
+
 ## [0.4.0] — 2026-06-09
 
 ### Security & robustness hardening

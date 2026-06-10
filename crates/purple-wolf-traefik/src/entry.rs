@@ -164,14 +164,7 @@ fn inspect() -> Action {
         // the cap rather than merely inflate the body; `body_truncated` records
         // in the audit log that bytes beyond the cap went un-inspected.
         let req = Request::build(
-            &method,
-            &host_hdr,
-            &path,
-            &raw_query,
-            headers,
-            body,
-            true,
-            source_ip,
+            &method, &host_hdr, &path, &raw_query, headers, body, true, source_ip,
         )
         .with_truncated_body(over_cap);
 

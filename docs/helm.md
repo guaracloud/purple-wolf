@@ -54,6 +54,29 @@ helm upgrade --install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
   -f values.subscriber.yaml
 ```
 
+## Protect relay admin metrics
+
+`/healthz` and `/readyz` stay unauthenticated for Kubernetes probes. To require
+a bearer token for `/metrics` and `/version`, reference the token through the
+relay config and expose it as an environment variable:
+
+```yaml
+relay:
+  secret:
+    create: true
+    stringData:
+      ADMIN_TOKEN: replace-with-generated-token
+  extraEnv:
+    - name: ADMIN_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: purple-wolf-relay-secrets
+          key: ADMIN_TOKEN
+  config:
+    relay:
+      admin_token_env: ADMIN_TOKEN
+```
+
 ## Use pinned images
 
 After verifying `release-manifest.json`, pin image digests:

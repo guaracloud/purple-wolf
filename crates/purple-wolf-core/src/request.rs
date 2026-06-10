@@ -429,7 +429,10 @@ mod tests {
         let v = Request::build("POST", "h", "/p", "", vec![], b"abc".to_vec(), true, ip());
         assert!(!v.body_truncated, "body_truncated must default to false");
         let v2 = v.with_truncated_body(true);
-        assert!(v2.body_truncated, "with_truncated_body(true) must set the flag");
+        assert!(
+            v2.body_truncated,
+            "with_truncated_body(true) must set the flag"
+        );
     }
 
     #[test]
@@ -437,8 +440,17 @@ mod tests {
         // When the body was truncated at the cap but we still inspect the
         // buffered prefix, the prefix bytes must appear in inspectable_fields
         // so an in-prefix payload is detected.
-        let v = Request::build("POST", "h", "/p", "", vec![], b"prefix-bytes".to_vec(), true, ip())
-            .with_truncated_body(true);
+        let v = Request::build(
+            "POST",
+            "h",
+            "/p",
+            "",
+            vec![],
+            b"prefix-bytes".to_vec(),
+            true,
+            ip(),
+        )
+        .with_truncated_body(true);
         assert!(v.inspectable_fields().contains(&b"prefix-bytes".as_slice()));
         assert!(v.body_truncated);
     }

@@ -1,8 +1,8 @@
 //! Admin HTTP server: /healthz, /readyz, /metrics, /version.
 //!
 //! Bound on a separate address from any subscriber endpoints; intended
-//! for cluster-internal scrape only. Authentication on the admin
-//! surface is a v0.4 concern — for v0.3, bind to an internal CIDR.
+//! for cluster-internal scrape only. Optional bearer auth protects data
+//! and metadata endpoints while keeping probe endpoints open.
 
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -22,7 +22,7 @@ use crate::metrics::Metrics;
 /// listener on `addr` and delegates to `serve_listener`.
 ///
 /// `auth_token` is the optional bearer token guarding the admin surface.
-/// `None` leaves the endpoints open (the v0.3 default) — callers should log
+/// `None` leaves the endpoints open (the original default) — callers should log
 /// a startup warning in that case so the open surface is a conscious choice.
 pub async fn serve(
     addr: SocketAddr,
@@ -83,11 +83,11 @@ async fn route(
     metrics: Arc<Metrics>,
     auth_token: Option<Arc<String>>,
 ) -> Response<Full<Bytes>> {
-    // Liveness must never require auth: an orchestrator's probe has no token,
-    // and a 401 on /healthz would make the relay look dead. Everything that
-    // exposes data or internal state (/metrics, /readyz, /version) is gated.
+    // Probe endpoints must never require auth: orchestrator health/readiness
+    // checks carry no bearer token, and a 401 would make the relay look dead
+    // or permanently unready. Data/metadata endpoints remain gated.
     let path = req.uri().path();
-    if path != "/healthz" {
+    if path != "/healthz" && path != "/readyz" {
         let header = req
             .headers()
             .get(hyper::header::AUTHORIZATION)
@@ -144,7 +144,7 @@ fn json(status: StatusCode, body: &'static [u8]) -> Response<Full<Bytes>> {
 /// Decide whether an admin request is authorized.
 ///
 /// - `configured`: the operator-set bearer token, or `None` when admin auth
-///   is disabled (the default — preserves v0.3 open behavior).
+///   is disabled (the default — preserves the original open behavior).
 /// - `auth_header`: the request's `Authorization` header value, if present.
 ///
 /// When a token is configured, the header must be exactly `Bearer <token>`.
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn authorized_when_no_token_configured() {
-        // Default (no token) preserves v0.3 open behavior: any request is
+        // Default (no token) preserves the original open behavior: any request is
         // authorized. The startup warning (logged elsewhere) tells operators
         // to front it with an authenticated proxy or set a token.
         assert!(is_authorized(None, None));
@@ -211,7 +211,10 @@ mod tests {
 
     #[test]
     fn accepts_correct_bearer_token() {
-        assert!(is_authorized(Some("s3cret-token"), Some("Bearer s3cret-token")));
+        assert!(is_authorized(
+            Some("s3cret-token"),
+            Some("Bearer s3cret-token")
+        ));
     }
 
     /// Smoke test: bind a listener on port 0, drive each admin endpoint
@@ -287,6 +290,16 @@ mod tests {
         // No token → 401 on a protected endpoint.
         let r = client.get(format!("{base}/metrics")).send().await.unwrap();
         assert_eq!(r.status(), 401, "metrics without token must be 401");
+
+        // Readiness is probe-safe: Kubernetes readiness checks do not carry
+        // bearer tokens, so /readyz must not be auth-gated even when admin
+        // auth protects metrics and version metadata.
+        let r = client.get(format!("{base}/readyz")).send().await.unwrap();
+        assert_eq!(
+            r.status(),
+            503,
+            "readyz must report pipeline readiness, not admin auth"
+        );
 
         // Wrong token → 401.
         let r = client

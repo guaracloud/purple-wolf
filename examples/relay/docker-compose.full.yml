@@ -1,4 +1,4 @@
-# End-to-end purple-wolf v0.3 simulation.
+# End-to-end purple-wolf v0.4.1 simulation.
 #
 # Brings up:
 #   - upstream         — a stub HTTP server (the "real" backend)
@@ -47,7 +47,7 @@ services:
       - RECORD_PATH=/dev/stdout
 
   relay:
-    image: ghcr.io/guaracloud/purple-wolf-relay:0.3.0
+    image: ghcr.io/guaracloud/purple-wolf-relay:0.4.1
     command:
       - --config=/etc/purple-wolf-relay/relay.yaml
       - --admin-addr=0.0.0.0:9090

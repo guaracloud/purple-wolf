@@ -13,7 +13,7 @@ metadata:
     app.kubernetes.io/name: purple-wolf-relay
     app.kubernetes.io/component: webhook-relay
 spec:
-  # v0.3 is single-instance: clustering / leader-election is v0.4.
+  # The relay is single-instance by default.
   # Running >1 replica concurrently is supported (subscribers should
   # dedupe on event_id) but per-instance bookmarks and DLQs are not
   # coordinated.
@@ -44,7 +44,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: relay
-          image: ghcr.io/guaracloud/purple-wolf-relay:0.3.0
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.1
           imagePullPolicy: IfNotPresent
           args:
             - --config=/etc/purple-wolf-relay/relay.yaml

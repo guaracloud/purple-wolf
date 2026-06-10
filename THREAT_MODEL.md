@@ -280,10 +280,10 @@ The protocol contract lives in [`docs/webhook-protocol.md`](docs/webhook-protoco
 
 - The relay has **no inbound trust** from subscribers — it only sends.
   Subscribers expose an HTTP endpoint; the relay never accepts
-  webhooks back. The admin surface (`/metrics`, `/healthz`, `/readyz`,
-  `/version`) is intended for cluster-internal scrape only and has
-  no authentication in v0.3 — bind to an internal network or front
-  with an authenticated reverse proxy.
+  webhooks back. The admin surface is intended for cluster-internal
+  scrape only. Optional bearer auth can protect `/metrics` and
+  `/version`; `/healthz` and `/readyz` stay unauthenticated so
+  orchestrator probes continue to work.
 - Each subscriber is identified by a shared HMAC secret. The relay
   references secrets via `secret_env` or `secret_file` — they must
   not be inlined in YAML. Secrets are held in
@@ -304,7 +304,8 @@ The protocol contract lives in [`docs/webhook-protocol.md`](docs/webhook-protoco
 - **Subscriber endpoint returns 4xx (non-408/429).** Treated as a
   permanent client-side problem (bad URL, expired secret, invalid
   schema) → envelope to DLQ, no retry. Fix the subscriber config and
-  use the planned `POST /dlq/<id>/replay` admin endpoint (v0.4).
+  restart/replay from the source where possible; an authenticated DLQ
+  replay endpoint is future work.
 - **Slow subscriber backpressures fast ones.** Cannot happen: the
   fan-out uses `try_send`, so a full per-subscriber queue drops the
   event for THAT subscriber and increments
@@ -316,14 +317,14 @@ The protocol contract lives in [`docs/webhook-protocol.md`](docs/webhook-protoco
 2. Deploy the new secret to the subscriber side first; subscribers
    should accept either old or new (overlap window).
 3. Update the relay's `secret_env` / `secret_file` to the new value
-   and restart the relay (or HUP if/when v0.4 wires reload).
+   and restart the relay. Hot reload is future work.
 4. After confirming no failed verifications on the subscriber, retire
    the old secret.
 
 ### 7.4 What the relay does NOT do
 
 - **No durable DLQ.** The bounded in-memory DLQ is lost on restart;
-  SQLite-backed DLQ is a v0.4 concern.
+  SQLite-backed DLQ is future work.
 - **No clustering / shared state across instances.** Each relay
   instance bookmarks the log tail independently; running two relays
   against the same log file is supported (with subscriber-side dedup

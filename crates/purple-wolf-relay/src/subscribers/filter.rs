@@ -11,8 +11,7 @@
 //! - `severity_min`: `envelope.event["blocked_severity"]` must parse
 //!   as a known `Severity` and be `>= severity_min`. If
 //!   `blocked_severity` is absent the event is dropped (rule-only
-//!   `would_block_rules` entries don't carry severity in the v0.3
-//!   audit schema; v0.4 will).
+//!   `would_block_rules` entries don't carry severity in the audit schema).
 //! - `blocked_rule_pattern`: simple glob (`*` wildcard) against
 //!   `event["blocked_rule"]` OR any entry of
 //!   `event["would_block_rules"]`.
@@ -256,7 +255,7 @@ mod tests {
             ..Default::default()
         });
         // Allow-mode events don't have blocked_severity; severity_min
-        // can't be satisfied on them in v0.3.
+        // can't be satisfied on them.
         let env = env_with(
             BTreeMap::new(),
             serde_json::json!({"action": "allow", "would_block_rules": []}),

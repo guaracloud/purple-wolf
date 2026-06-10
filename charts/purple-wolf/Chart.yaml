@@ -2,8 +2,8 @@ apiVersion: v2
 name: purple-wolf
 description: Traefik Web Application Firewall plugin packaging and webhook relay
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.4.1
+appVersion: "0.4.1"
 home: https://github.com/guaracloud/purple-wolf
 sources:
   - https://github.com/guaracloud/purple-wolf

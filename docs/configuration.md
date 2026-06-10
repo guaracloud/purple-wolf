@@ -9,7 +9,6 @@
 | `groups.injection` | `{ enabled, mode }` | `{true, enforce}` | SQLi + XSS via libinjection. |
 | `groups.signatures` | `{ enabled, mode }` | `{true, enforce}` | Known-bad literal scanner (path traversal, LFI incl. `/etc/shadow` `/proc/self/environ` `/WEB-INF/`, shell-command injection `;wget`/`;curl`/`\|bash`, `${jndi:` Log4Shell, `php://`/`phar://`/`expect://` wrappers, `xp_cmdshell`, scanner UAs). |
 | `groups.structural` | `{ enabled, mode }` | `{true, monitor}` | Method allowlist, header size/count caps, NUL-byte + CR/LF in path/query. |
-| `groups.structural` | `{ enabled, mode }` | `{true, monitor}` | Method allowlist + header anomalies. |
 | `groups.reputation` | `{ enabled, mode }` | `{false, monitor}` | Per-IP rate limit + IP deny list. |
 | `reputation.perSecond` | int | `100` | Per-IP token rate. **Per Traefik pod**; effective rate = configured × pod count. |
 | `reputation.denyList` | list[string] | `[]` | IPs (or "ip:port" forms) to deny unconditionally. |

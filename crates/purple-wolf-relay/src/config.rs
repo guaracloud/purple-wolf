@@ -43,9 +43,9 @@ pub struct RelayConfig {
     /// drops events for THAT subscriber, never backpressures the fan-out.
     #[serde(default = "default_subscriber_queue")]
     pub subscriber_queue: usize,
-    /// Optional bearer-token guard for the admin surface (/metrics, /readyz,
-    /// /version; /healthz stays open for liveness probes). When unset the
-    /// admin surface is open — the v0.3 default — and the relay logs a
+    /// Optional bearer-token guard for the admin data/metadata surface
+    /// (/metrics, /version). Probe endpoints (/healthz, /readyz) stay open.
+    /// When unset the admin surface is open — the original default — and the relay logs a
     /// startup warning. The token is referenced indirectly so it never sits
     /// in the config file: exactly one of `admin_token_env` / `admin_token_file`.
     #[serde(default)]
@@ -69,8 +69,8 @@ fn default_subscriber_queue() -> usize {
 
 // ---------- sources ----------
 
-/// Tagged union of source kinds. Extending in v0.4 (Kafka, Loki, Vector)
-/// is purely additive.
+/// Tagged union of source kinds. Extending it with Kafka, Loki, Vector, or
+/// other sources is purely additive.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceConfig {
@@ -264,26 +264,24 @@ pub struct Resolved {
 /// Resolve the optional admin bearer token from its env/file reference.
 /// Mirrors the subscriber-secret rules: at most one of the two references,
 /// non-empty when present. `None` means the admin surface is left open.
-fn resolve_admin_token(
-    relay: &RelayConfig,
-) -> anyhow::Result<Option<zeroize::Zeroizing<String>>> {
+fn resolve_admin_token(relay: &RelayConfig) -> anyhow::Result<Option<zeroize::Zeroizing<String>>> {
     match (&relay.admin_token_env, &relay.admin_token_file) {
         (None, None) => Ok(None),
         (Some(_), Some(_)) => {
             anyhow::bail!("relay: only one of admin_token_env / admin_token_file may be set")
         }
         (Some(env_name), None) => {
-            let v = std::env::var(env_name).map_err(|_| {
-                anyhow::anyhow!("relay: admin_token_env {env_name:?} is not set")
-            })?;
+            let v = std::env::var(env_name)
+                .map_err(|_| anyhow::anyhow!("relay: admin_token_env {env_name:?} is not set"))?;
             if v.is_empty() {
                 anyhow::bail!("relay: admin_token_env {env_name:?} is empty");
             }
             Ok(Some(zeroize::Zeroizing::new(v)))
         }
         (None, Some(path)) => {
-            let s = std::fs::read_to_string(path)
-                .map_err(|e| anyhow::anyhow!("relay: reading admin_token_file {}: {e}", path.display()))?;
+            let s = std::fs::read_to_string(path).map_err(|e| {
+                anyhow::anyhow!("relay: reading admin_token_file {}: {e}", path.display())
+            })?;
             let trimmed = s.trim().to_string();
             if trimmed.is_empty() {
                 anyhow::bail!("relay: admin_token_file {} is empty", path.display());
