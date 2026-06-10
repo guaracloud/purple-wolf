@@ -7,7 +7,12 @@ use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// Bounded LRU token bucket keyed by source IP.
+/// Sentinel link value meaning "no node" (list head/tail terminator).
+/// `usize::MAX` is safe because the slab can never grow that large —
+/// `cap` is bounded by `max_tracked_ips`.
+const NIL: usize = usize::MAX;
+
+/// Bounded LRU token bucket keyed by source IP, with **O(1)** eviction.
 ///
 /// **Why not `governor`:** governor's `RateLimiter::keyed` is backed by a
 /// `DashMap` with no upper bound on the key set. An attacker rotating
@@ -17,84 +22,198 @@ use std::time::Duration;
 /// the request and Traefik's plugin-failure directive kicks in — a cheap
 /// memory-DoS against the plugin instance.
 ///
-/// This implementation hard-caps the tracked-IP count at `max_tracked_ips`
-/// (default 50,000 — see [`crate::config::ReputationConfig`]) and evicts
-/// the least-recently-seen entry when the cap is reached. The hot path is
-/// a single HashMap lookup + a small amount of bucket math; no async, no
-/// futures, no DashMap, no dependency outside std.
+/// **Why not the previous in-crate version:** v0.3 hard-capped the map but
+/// evicted via an O(n) `min_by_key` scan over every tracked IP. That made
+/// the *benign* case cheap (overflow is rare) but the *adversarial* case
+/// quadratic: once an attacker fills the map to `cap` by rotating IPs,
+/// every subsequent new-IP request scans all `cap` entries — turning the
+/// memory-DoS mitigation into a CPU-DoS lever that eats the plugin's CPU
+/// budget far below the benign RPS ceiling.
+///
+/// This implementation keeps the hard cap but makes **every** operation —
+/// lookup, refill, touch, insert, and eviction — O(1). State lives in a
+/// fixed-capacity slab (`Vec<Node>`); an intrusive doubly-linked list
+/// threads the slab in recency order (`head` = most-recently-seen, `tail`
+/// = least). A `HashMap<IpAddr, usize>` indexes IP → slab slot. The slab
+/// grows to `cap` and never shrinks; once full, an insert evicts `tail`
+/// and reuses *that exact slot* in place (no separate free list — slots
+/// are only ever freed by an insert that immediately reclaims them). No
+/// async, no futures, no DashMap, no dependency outside std.
 struct LruTokenBuckets<C: Clock> {
-    /// Tracks (tokens, last_refill_nanos, last_touch_seq). The seq lets us
-    /// evict the LRU entry in O(n) on overflow — acceptable since overflow
-    /// is by definition rare (~once per `max_tracked_ips` requests).
-    buckets: HashMap<IpAddr, Bucket>,
+    /// IP → slab index. Bounded at `cap` entries.
+    index: HashMap<IpAddr, usize>,
+    /// Backing slab. Grows to at most `cap` nodes, then is reused in place.
+    slab: Vec<Node>,
+    /// Most-recently-seen slot, or `NIL` when empty.
+    head: usize,
+    /// Least-recently-seen slot (eviction victim), or `NIL` when empty.
+    tail: usize,
     cap: usize,
     quota_per_sec: u32,
-    next_seq: u64,
     clock: C,
 }
 
-#[derive(Clone, Copy)]
-struct Bucket {
+/// One slab slot: a token bucket plus intrusive prev/next links into the
+/// recency list. `ip` is `None` only transiently inside [`evict_tail`].
+struct Node {
+    ip: Option<IpAddr>,
     /// Token count as a float so partial refills accumulate correctly.
     tokens: f64,
     /// Clock reading at the last refill, used to compute elapsed for the
     /// next refill.
     last_refill: Duration,
-    /// Monotonic counter incremented on every access; lowest seq → oldest.
-    last_seen_seq: u64,
+    prev: usize,
+    next: usize,
 }
 
 impl<C: Clock> LruTokenBuckets<C> {
     fn new(quota_per_sec: u32, cap: usize, clock: C) -> LruTokenBuckets<C> {
+        // A cap of 0 would leave nothing to track; treat it as 1.
+        let cap = cap.max(1);
         LruTokenBuckets {
-            buckets: HashMap::new(),
-            // A cap of 0 would deadlock the eviction loop; treat it as 1.
-            cap: cap.max(1),
+            index: HashMap::with_capacity(cap),
+            slab: Vec::with_capacity(cap),
+            head: NIL,
+            tail: NIL,
+            cap,
             // A quota of 0 would mean "never allow anything"; the test
             // suite and existing call sites expect "at least 1 rps".
             quota_per_sec: quota_per_sec.max(1),
-            next_seq: 0,
             clock,
         }
     }
 
+    /// Number of distinct IPs currently tracked. Never exceeds `cap`.
+    /// Test-only introspection into the bounded map's size invariant.
+    #[cfg(test)]
+    fn tracked_len(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Whether `ip` currently has a live bucket. Test-only introspection
+    /// into eviction ordering.
+    #[cfg(test)]
+    fn tracked_contains(&self, ip: &IpAddr) -> bool {
+        self.index.contains_key(ip)
+    }
+
+    /// Unlink `slot` from the recency list (it must currently be linked).
+    fn unlink(&mut self, slot: usize) {
+        let (prev, next) = {
+            let n = &self.slab[slot];
+            (n.prev, n.next)
+        };
+        if prev != NIL {
+            self.slab[prev].next = next;
+        } else {
+            self.head = next;
+        }
+        if next != NIL {
+            self.slab[next].prev = prev;
+        } else {
+            self.tail = prev;
+        }
+    }
+
+    /// Push `slot` to the front of the recency list (becomes MRU).
+    fn push_front(&mut self, slot: usize) {
+        let old_head = self.head;
+        {
+            let n = &mut self.slab[slot];
+            n.prev = NIL;
+            n.next = old_head;
+        }
+        if old_head != NIL {
+            self.slab[old_head].prev = slot;
+        }
+        self.head = slot;
+        if self.tail == NIL {
+            self.tail = slot;
+        }
+    }
+
+    /// Move an already-linked slot to the front (mark most-recently-seen).
+    fn touch(&mut self, slot: usize) {
+        if self.head == slot {
+            return;
+        }
+        self.unlink(slot);
+        self.push_front(slot);
+    }
+
+    /// Evict the LRU node (`tail`): unlink it from the recency list and
+    /// drop its IP from the index. Returns the now-detached slot index for
+    /// immediate in-place reuse by the caller. The returned slot has `prev`
+    /// and `next` left dangling — the caller MUST re-initialize and
+    /// re-link it (via `push_front`) before any other list operation.
+    fn evict_tail(&mut self) -> usize {
+        let victim = self.tail;
+        debug_assert!(victim != NIL, "evict_tail called on empty list");
+        self.unlink(victim);
+        if let Some(ip) = self.slab[victim].ip.take() {
+            self.index.remove(&ip);
+        }
+        victim
+    }
+
+    /// Acquire a slot for a new IP: grow the slab while under `cap`,
+    /// otherwise evict the LRU and reuse its slot. The returned slot is
+    /// detached from the recency list; the caller links it via `push_front`.
+    fn acquire_slot(&mut self) -> usize {
+        if self.slab.len() < self.cap {
+            // Grow: the slab has not yet reached `cap`.
+            self.slab.push(Node {
+                ip: None,
+                tokens: 0.0,
+                last_refill: Duration::ZERO,
+                prev: NIL,
+                next: NIL,
+            });
+            return self.slab.len() - 1;
+        }
+        // At capacity: evict the least-recently-seen entry and reuse it.
+        self.evict_tail()
+    }
+
     /// Returns `true` iff the request is **allowed** (i.e. a token was
     /// consumed). Returns `false` when the per-IP budget is exhausted.
+    /// Every path is O(1).
     fn check(&mut self, ip: IpAddr) -> bool {
         let now = self.clock.now();
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.wrapping_add(1);
         let quota = self.quota_per_sec as f64;
 
-        // Evict LRU only when we're about to insert AND we're at the cap.
-        if !self.buckets.contains_key(&ip) && self.buckets.len() >= self.cap {
-            if let Some(oldest) = self
-                .buckets
-                .iter()
-                .min_by_key(|(_, b)| b.last_seen_seq)
-                .map(|(k, _)| *k)
-            {
-                self.buckets.remove(&oldest);
-            }
+        if let Some(&slot) = self.index.get(&ip) {
+            // Known IP: refill, touch, consume.
+            self.touch(slot);
+            let n = &mut self.slab[slot];
+            let elapsed = now.saturating_sub(n.last_refill).as_secs_f64();
+            n.tokens = (n.tokens + elapsed * quota).min(quota);
+            n.last_refill = now;
+            return consume(&mut n.tokens);
         }
 
-        let bucket = self.buckets.entry(ip).or_insert(Bucket {
-            tokens: quota,
-            last_refill: now,
-            last_seen_seq: seq,
-        });
-        // Refill: add `quota * elapsed_sec` tokens, capped at `quota`.
-        let elapsed = now.saturating_sub(bucket.last_refill).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * quota).min(quota);
-        bucket.last_refill = now;
-        bucket.last_seen_seq = seq;
-
-        if bucket.tokens >= 1.0 {
-            bucket.tokens -= 1.0;
-            true
-        } else {
-            false
+        // New IP: acquire a slot (may evict the LRU), initialize a fresh
+        // full bucket so a reused slot never carries stale token state.
+        let slot = self.acquire_slot();
+        {
+            let n = &mut self.slab[slot];
+            n.ip = Some(ip);
+            n.tokens = quota;
+            n.last_refill = now;
         }
+        self.index.insert(ip, slot);
+        self.push_front(slot);
+        consume(&mut self.slab[slot].tokens)
+    }
+}
+
+/// Consume one token if available. Returns whether the request is allowed.
+fn consume(tokens: &mut f64) -> bool {
+    if *tokens >= 1.0 {
+        *tokens -= 1.0;
+        true
+    } else {
+        false
     }
 }
 
@@ -232,10 +351,10 @@ mod tests {
         }
         let guard = det.state.lock().unwrap();
         assert!(
-            guard.buckets.len() <= cap,
+            guard.tracked_len() <= cap,
             "map should be bounded at {} entries, was {}",
             cap,
-            guard.buckets.len()
+            guard.tracked_len()
         );
     }
 
@@ -255,16 +374,86 @@ mod tests {
         let _ = det.inspect(&req_from("10.0.0.99"));
         let guard = det.state.lock().unwrap();
         assert!(
-            guard
-                .buckets
-                .contains_key(&"10.0.0.0".parse::<IpAddr>().unwrap()),
+            guard.tracked_contains(&"10.0.0.0".parse::<IpAddr>().unwrap()),
             "re-touched IP must survive eviction"
         );
         assert!(
-            !guard
-                .buckets
-                .contains_key(&"10.0.0.1".parse::<IpAddr>().unwrap()),
+            !guard.tracked_contains(&"10.0.0.1".parse::<IpAddr>().unwrap()),
             "LRU entry should have been evicted"
+        );
+    }
+
+    /// The eviction order must be strict LRU even under heavy churn: after
+    /// filling the cap and then inserting many fresh IPs, exactly the most
+    /// recently seen `cap` IPs survive and the map never exceeds `cap`.
+    /// This is the adversarial case (IP-rotation flood) the O(1) limiter
+    /// must handle in constant work per request.
+    #[test]
+    fn eviction_order_is_strict_lru_under_churn() {
+        let cap = 8;
+        let det = ReputationDetector::with_capacity(1000, vec![], cap);
+        let total = cap * 5;
+        for i in 0..total {
+            let _ = det.inspect(&req_from(&format!("10.0.{}.{}", i / 256, i % 256)));
+            // Invariant must hold at every step, not just at the end.
+            assert!(det.state.lock().unwrap().tracked_len() <= cap);
+        }
+        let guard = det.state.lock().unwrap();
+        assert_eq!(guard.tracked_len(), cap, "map should be exactly full");
+        // The last `cap` IPs inserted must all still be present...
+        for i in (total - cap)..total {
+            let ip = format!("10.0.{}.{}", i / 256, i % 256)
+                .parse::<IpAddr>()
+                .unwrap();
+            assert!(
+                guard.tracked_contains(&ip),
+                "most-recent IP {ip} must survive churn"
+            );
+        }
+        // ...and the first one inserted must be long gone.
+        let oldest = "10.0.0.0".parse::<IpAddr>().unwrap();
+        assert!(
+            !guard.tracked_contains(&oldest),
+            "oldest IP must have been evicted under churn"
+        );
+    }
+
+    /// When an IP is evicted and later re-seen, it must start with a fresh,
+    /// full token bucket — no stale token/refill state may survive in a
+    /// reused internal slot. Regression guard for slot-reuse correctness in
+    /// the O(1) slab-backed LRU.
+    #[test]
+    fn refill_math_survives_slot_reuse() {
+        let cap = 2;
+        // quota 1/s: a single IP gets one token, the second hit is limited.
+        let det = ReputationDetector::with_capacity(1, vec![], cap);
+        let victim = "10.0.0.1";
+        // Exhaust the victim's bucket.
+        let _ = det.inspect(&req_from(victim)); // allowed (consumes the token)
+        assert!(
+            det.inspect(&req_from(victim))
+                .iter()
+                .any(|x| x.rule == "rate_limited"),
+            "second hit from the same IP should be limited"
+        );
+        // Evict the victim by flooding `cap` other fresh IPs.
+        for i in 0..cap {
+            let _ = det.inspect(&req_from(&format!("10.9.9.{i}")));
+        }
+        assert!(
+            !det.state
+                .lock()
+                .unwrap()
+                .tracked_contains(&victim.parse::<IpAddr>().unwrap()),
+            "victim should have been evicted"
+        );
+        // Re-seeing the victim must hand it a fresh full bucket → allowed,
+        // not carrying the exhausted state from its reused slot.
+        assert!(
+            det.inspect(&req_from(victim))
+                .iter()
+                .all(|x| x.rule != "rate_limited"),
+            "re-seen IP must get a fresh bucket after slot reuse"
         );
     }
 }
