@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-09
+
 ### Security & robustness hardening
 
 - **O(1) reputation-limiter eviction.** The bounded per-IP token-bucket map
@@ -50,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   parser, wired into the `fuzz-smoke` CI job.
 - **Benign corpus widened** (~53 → ~104 lines) targeting the new signatures'
   collision boundaries; the 0%-FPR gate holds.
+
+## [0.3.0] — 2026-05-25
 
 ### Added — v0.3 audit labels + webhook relay
 

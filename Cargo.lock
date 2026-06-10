@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aho-corasick",
  "cc",
@@ -1300,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-relay"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-traefik"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "purple-wolf-core",
  "serde",

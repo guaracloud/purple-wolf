@@ -2,8 +2,13 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.3 released (audit labels, webhook relay, signed release
-artifacts, SBOMs, Helm OCI chart, and Kubernetes packaging). See
+**Status:** v0.4 released — a security & robustness hardening pass on top of
+v0.3 (audit labels, webhook relay, signed release artifacts, SBOMs, Helm OCI
+chart, and Kubernetes packaging). v0.4 adds an O(1) reputation limiter,
+percent-decode-to-fixpoint, an expanded signature pack, a User-Agent SQLi
+probe, over-cap body-prefix inspection, an offline config validator, relay
+SSRF hardening + optional admin auth, and new fuzz targets. See
+[CHANGELOG.md](CHANGELOG.md) for the full list,
 [THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed
 to catch, and [docs/configuration.md](docs/configuration.md) for the
 Middleware config reference. The webhook protocol contract lives in
