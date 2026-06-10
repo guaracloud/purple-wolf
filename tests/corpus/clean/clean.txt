@@ -74,3 +74,77 @@ q=Привет мир
 q=function add(a, b) { return a + b; }
 q=for i in range(10): print(i)
 q=SELECT name FROM users (this is text not a payload — context: blog post)
+
+# ── Semicolon-bearing benign values (rce_cmd collision boundary) ────────
+# These contain ';' but never ';<cmd>' — the FPR guard for the new
+# command-injection signatures (;wget ;curl ;bash ;nc |bash |sh).
+cookie_echo=sessionid=abc123; csrftoken=xyz789; theme=dark
+prefs=lang=en;tz=UTC;layout=grid
+list=apples;oranges;pears
+csv=name;email;role;created_at
+rgb=rgb(255;255;255)
+matrix=1,2,3;4,5,6;7,8,9
+sql_text=Use a semicolon ; to end a statement; then start another.
+path_list=/usr/local/bin;/usr/bin;/bin
+q=details about the product;more=info
+
+# ── "php" / "web-inf" in benign positions (php_wrapper / lfi boundary) ──
+# Ordinary .php endpoints and words containing the literal, never the
+# php:// stream wrapper or the /WEB-INF/ container path.
+page=index.php
+script=/wp-content/themes/default/functions.php
+doc=phpunit testing guide
+text=I configured php-fpm and nginx together.
+filename=report.phps
+ref=https://www.php.net/manual/en/index.php
+note=the webinfographic was shared widely
+q=web infrastructure best practices
+
+# ── Percent signs / encodings (decode-to-fixpoint FPR boundary) ─────────
+discount=50%25off
+q=100%25 organic cotton
+progress=75%25 complete
+formula=a %25 b (modulo)
+note=apply a 10%25 discount at checkout
+coupon=SAVE20%25NOW
+
+# ── Realistic browser & tool User-Agents (UA suffix-probe FPR guard) ────
+# Fed here as query values; the dedicated UA-header probe is unit-tested.
+ua=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+ua=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15
+ua=Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148
+ua=Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0
+ua=curl/8.4.0
+ua=PostmanRuntime/7.36.0
+
+# ── GraphQL / API bodies ────────────────────────────────────────────────
+query={ user(id: 42) { name email role } }
+query=mutation { createOrder(items: [1,2,3]) { id total } }
+operationName=GetProducts&variables={"category":"shoes","limit":20}
+q=query { products(filter: {inStock: true}) { id name price } }
+
+# ── Form-encoded submissions ────────────────────────────────────────────
+first_name=Mary-Jane&last_name=O'Brien&newsletter=true
+address=221B Baker Street, London&postcode=NW1 6XE
+comment=Great product! Works as described. Would buy again.
+bio=Software engineer; loves Rust, climbing & coffee.
+title=10 Tips & Tricks for Faster Builds (2026 edition)
+
+# ── Base64 / encoded blobs (common in tokens, avatars) ──────────────────
+avatar=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=
+jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U
+state=eyJyZXR1cm5fdG8iOiIvZGFzaGJvYXJkIn0
+
+# ── Paths & filenames (path_traversal / lfi boundary) ───────────────────
+file=annual-report-2026.pdf
+path=/api/v2/users/42/orders
+download=invoice_2026_05_25.csv
+asset=/static/css/main.min.css
+template=emails/welcome.html
+breadcrumb=Home / Products / Shoes / Running
+
+# ── Markdown / rich text (backtick rce boundary lives elsewhere) ────────
+q=See the docs at docs/configuration for details.
+note=Use the --release flag for production builds.
+text=Compare a < b and c > d in the analysis.
+heading=Section 4.2: Performance & Tuning
