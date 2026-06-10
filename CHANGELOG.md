@@ -6,6 +6,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security & robustness hardening
+
+- **O(1) reputation-limiter eviction.** The bounded per-IP token-bucket map
+  previously evicted via an O(n) scan; once an attacker filled it to the cap
+  by rotating source IPs, every new-IP request scanned all entries — a
+  CPU-DoS lever. Replaced with an intrusive doubly-linked-list LRU over a
+  fixed slab: every operation is O(1). No new dependencies.
+- **Percent-decode to a bounded fixpoint** (max 3 passes) closes multi-
+  encoding evasion (`%2527` → `%27` → `'`); single-pass decoders inspect the
+  still-encoded form and miss the cleartext. Inspection-only; bytes forwarded
+  upstream are unchanged.
+- **Signature pack expansion** (precision-first, collision-aware): shell
+  command injection (`;wget` `;curl` `;bash` `;nc ` `|bash` `|sh `),
+  `${jndi:` (Log4Shell), `php://`/`phar://`/`expect://`, `/etc/shadow`,
+  `/proc/self/environ`, `/WEB-INF/`, `xp_cmdshell`. Closes the documented
+  round-2 `;wget` gap.
+- **User-Agent SQLi suffix probe** closes the documented Mozilla-prefix gap:
+  libinjection fingerprints `Mozilla/5.0 1 OR 1=1` as a UA string; the
+  detector now re-probes the UA suffix so the isolated SQL is tokenized.
+- **Structural NUL-byte and CR/LF checks** over the decoded path and query
+  (LFI path-truncation and response-splitting adjacency).
+- **Over-cap request bodies now inspect the buffered prefix** instead of
+  discarding the whole body, closing the "prepend padding to skip body
+  inspection" lever (THREAT_MODEL §4.2). New `body_truncated` audit field.
+- **Panic discipline.** `wasm32-wasip1` is `panic = "abort"`, so the guest's
+  `catch_unwind` never catches a detector panic (it traps the instance and
+  bypasses `failMode`). Documented honestly (Cargo.toml, THREAT_MODEL §4.3)
+  and enforced structurally: `deny(clippy::unwrap_used / expect_used / panic)`
+  in core and traefik exclude panics from production paths.
+- **`config_fallback` audit field** marks every line emitted while running on
+  the all-monitor fallback (a bad Middleware config), so dashboards see that
+  enforcement is silently off — not just one startup log line.
+- **`purple-wolf-validate`** binary validates a plugin config offline (same
+  adapter as the live guest) for operator CI.
+- **Relay SSRF hardening:** the HTTP enricher now percent-encodes the
+  substituted label value so it can only be an opaque path component, never
+  alter the URL structure or authority.
+- **Relay admin auth (optional):** bearer-token guard on `/metrics`,
+  `/readyz`, `/version` (constant-time compare; `/healthz` stays open). Off by
+  default with a startup warning, preserving v0.3 behavior.
+- **Fuzz targets** for `client_ip` (XFF parsing) and the relay log-line
+  parser, wired into the `fuzz-smoke` CI job.
+- **Benign corpus widened** (~53 → ~104 lines) targeting the new signatures'
+  collision boundaries; the 0%-FPR gate holds.
+
 ### Added — v0.3 audit labels + webhook relay
 
 - **`Config.labels: BTreeMap<String, String>`** on every Middleware. Free-form

