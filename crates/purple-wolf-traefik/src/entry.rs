@@ -137,7 +137,8 @@ fn inspect() -> Action {
             .map(|(_, v)| v.clone())
             .unwrap_or_default();
 
-        // Body (capped).
+        // Body (capped). `read_request_body` buffers at most `cap` bytes;
+        // `over_cap` is true when the request carried more.
         let cap = cfg.body.max_inspect_bytes;
         let body = host::read_request_body(cap);
         let over_cap = host::request_body_exceeded(cap);
@@ -145,8 +146,13 @@ fn inspect() -> Action {
             host::write_response(403, b"body exceeds inspection cap");
             return Action::Block;
         }
-        let body_inspected = !over_cap;
-
+        // Always inspect what we buffered — including the prefix of an
+        // over-cap body. Previously an over-cap body was discarded wholesale
+        // (body_inspected = false), so prepending `maxInspectBytes` of padding
+        // defeated body inspection for free (THREAT_MODEL §4.2). Inspecting the
+        // already-buffered prefix forces an attacker to push the payload past
+        // the cap rather than merely inflate the body; `body_truncated` records
+        // in the audit log that bytes beyond the cap went un-inspected.
         let req = Request::build(
             &method,
             &host_hdr,
@@ -154,9 +160,10 @@ fn inspect() -> Action {
             &raw_query,
             headers,
             body,
-            body_inspected,
+            true,
             source_ip,
-        );
+        )
+        .with_truncated_body(over_cap);
 
         let enabled: Vec<Group> = [
             Group::Injection,

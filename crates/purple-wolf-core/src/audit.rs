@@ -28,6 +28,12 @@ pub struct AuditEntry {
     pub blocked_detail: Option<String>,
     /// Rules that would have blocked but were not enforced.
     pub would_block_rules: Vec<String>,
+    /// Whether the request body exceeded the inspection cap and only its
+    /// buffered prefix was inspected (bytes past the cap went un-inspected).
+    /// `skip_serializing_if` keeps the v0.2 audit-log shape unchanged for the
+    /// common, non-truncated case — the field appears only when `true`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub body_truncated: bool,
     /// Operator-supplied labels from `Config.labels`. Emitted verbatim
     /// (with control characters scrubbed) so downstream relays /
     /// log pipelines can route on them. `skip_serializing_if` keeps the
@@ -79,6 +85,7 @@ impl AuditEntry {
                 .iter()
                 .map(|v| format!("{}/{}", v.group.as_str(), v.rule))
                 .collect(),
+            body_truncated: req.body_truncated,
             labels: labels
                 .iter()
                 .map(|(k, v)| (k.clone(), scrub_label_value(v)))
@@ -108,6 +115,13 @@ fn scrub_label_value(v: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Predicate for `#[serde(skip_serializing_if)]` on `bool` fields — keeps
+/// additive audit fields out of the JSON in their default (false) state so
+/// the v0.2 log shape is preserved for the common case.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Serialize an AuditEntry as a single-line JSON string suitable for
@@ -274,5 +288,42 @@ mod tests {
         let labels = std::collections::BTreeMap::from([("k".into(), "a\x7fb".into())]);
         let entry = AuditEntry::from_with_labels(&req(), &block_decision(), &labels);
         assert_eq!(entry.labels.get("k").map(String::as_str), Some("a.b"));
+    }
+
+    // ── body_truncated audit field (Tier 1.6) ───────────────────────────────
+
+    #[test]
+    fn audit_marks_body_truncated_when_request_body_was_truncated() {
+        let truncated_req = Request::build(
+            "POST",
+            "Host",
+            "/p",
+            "",
+            vec![],
+            b"prefix".to_vec(),
+            true,
+            "1.2.3.4".parse::<IpAddr>().unwrap(),
+        )
+        .with_truncated_body(true);
+        let entry = AuditEntry::from(&truncated_req, &block_decision());
+        assert!(entry.body_truncated, "entry must carry body_truncated");
+        let json = to_log_line(&entry);
+        assert!(
+            json.contains(r#""body_truncated":true"#),
+            "json must include body_truncated when set: {json}"
+        );
+    }
+
+    #[test]
+    fn audit_omits_body_truncated_when_false_for_v02_backcompat() {
+        // Default (non-truncated) requests must not carry the field, so the
+        // v0.2 audit-log shape is unchanged for the common case.
+        let entry = AuditEntry::from(&req(), &block_decision());
+        assert!(!entry.body_truncated);
+        let json = to_log_line(&entry);
+        assert!(
+            !json.contains("body_truncated"),
+            "field must be omitted when false: {json}"
+        );
     }
 }

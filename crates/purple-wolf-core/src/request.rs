@@ -52,6 +52,12 @@ pub struct Request {
     body: Vec<u8>,
     /// Whether the body was read and is available for inspection.
     pub body_inspected: bool,
+    /// Whether the body was truncated at the inspection cap — i.e. the
+    /// request carried more body bytes than `maxInspectBytes` and only the
+    /// buffered prefix is present in [`Request::body_bytes`]. Surfaced in the
+    /// audit log so operators can see when a payload could be hiding past the
+    /// cap. Defaults to `false`; set via [`Request::with_truncated_body`].
+    pub body_truncated: bool,
     /// Source IP address, resolved from proxy headers or direct peer.
     pub source_ip: IpAddr,
     /// Pre-computed values of inspection-allow-list headers. Each value
@@ -100,9 +106,20 @@ impl Request {
             header_bytes,
             body,
             body_inspected,
+            body_truncated: false,
             source_ip,
             inspectable_headers,
         }
+    }
+
+    /// Mark whether the body was truncated at the inspection cap. Builder-
+    /// style so existing `Request::build` call sites need no change; the
+    /// http-wasm guest sets this when it inspects the buffered prefix of an
+    /// over-cap body (so an in-prefix payload is still caught, and the audit
+    /// log records that bytes past the cap went un-inspected).
+    pub fn with_truncated_body(mut self, truncated: bool) -> Request {
+        self.body_truncated = truncated;
+        self
     }
 
     /// Raw request body bytes, as the host delivered them. Detectors
@@ -404,6 +421,25 @@ mod tests {
             ip(),
         );
         assert!(v2.inspectable_fields().contains(&b"payload".as_slice()));
+    }
+
+    #[test]
+    fn body_truncated_defaults_false_and_setter_flips_it() {
+        let v = Request::build("POST", "h", "/p", "", vec![], b"abc".to_vec(), true, ip());
+        assert!(!v.body_truncated, "body_truncated must default to false");
+        let v2 = v.with_truncated_body(true);
+        assert!(v2.body_truncated, "with_truncated_body(true) must set the flag");
+    }
+
+    #[test]
+    fn truncated_body_prefix_is_still_inspected() {
+        // When the body was truncated at the cap but we still inspect the
+        // buffered prefix, the prefix bytes must appear in inspectable_fields
+        // so an in-prefix payload is detected.
+        let v = Request::build("POST", "h", "/p", "", vec![], b"prefix-bytes".to_vec(), true, ip())
+            .with_truncated_body(true);
+        assert!(v.inspectable_fields().contains(&b"prefix-bytes".as_slice()));
+        assert!(v.body_truncated);
     }
 
     #[test]
