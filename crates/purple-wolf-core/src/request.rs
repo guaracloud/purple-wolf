@@ -168,9 +168,39 @@ impl Request {
     }
 }
 
-/// Percent-decode once, lossily. Applied so encoded evasion payloads normalize.
+/// Maximum number of percent-decode passes applied to a single field.
+///
+/// A WAF must decode to a fixpoint: attackers double- and triple-encode
+/// payloads (`%2527` → `%27` → `'`) precisely because single-pass decoders
+/// inspect the still-encoded form and miss the cleartext attack. But an
+/// unbounded "decode until stable" loop is itself a DoS primitive on a
+/// crafted input, so we cap the passes. Three covers triple-encoding —
+/// the observed ceiling for real-world evasion kits — while staying O(1)
+/// per field.
+///
+/// This is inspection-only: the decoded form is never forwarded upstream,
+/// so over-decoding can only raise inspection aggressiveness, never alter
+/// the bytes the backend receives.
+const MAX_DECODE_PASSES: usize = 3;
+
+/// Percent-decode to a fixpoint (bounded), lossily. Applied so multiply-
+/// encoded evasion payloads normalize to the cleartext detectors match on.
+/// Stops early when a pass makes no change or no `%` remains.
 fn decode(s: &str) -> String {
-    percent_decode_str(s).decode_utf8_lossy().into_owned()
+    let mut cur = percent_decode_str(s).decode_utf8_lossy().into_owned();
+    for _ in 1..MAX_DECODE_PASSES {
+        // Fixpoint: nothing left that could be a percent-escape.
+        if !cur.contains('%') {
+            break;
+        }
+        let next = percent_decode_str(&cur).decode_utf8_lossy().into_owned();
+        // Fixpoint: this pass changed nothing (e.g. a lone `%` or `%zz`).
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+    cur
 }
 
 /// Pre-compute the values of allow-listed headers in both raw and
@@ -305,6 +335,42 @@ mod tests {
             v.query_params,
             vec![("q".to_string(), "' OR 1=1".to_string())]
         );
+    }
+
+    #[test]
+    fn double_encoded_sqli_in_query_is_decoded() {
+        // `%2527%2520OR%25201%253D1` is the double-encoding of
+        // `%27%20OR%201%3D1`, which itself decodes to `' OR 1=1`. A
+        // single-pass decoder leaves the inner `%27...` intact and the
+        // payload sails past byte-oriented detectors. Decode-to-fixpoint
+        // must recover the cleartext SQLi.
+        let v = Request::build(
+            "GET",
+            "h",
+            "/search",
+            "q=%2527%2520OR%25201%253D1",
+            vec![],
+            vec![],
+            false,
+            ip(),
+        );
+        assert_eq!(
+            v.query_params,
+            vec![("q".to_string(), "' OR 1=1".to_string())]
+        );
+    }
+
+    #[test]
+    fn decode_is_bounded_and_stops_at_fixpoint() {
+        // A value with no `%` is returned unchanged.
+        assert_eq!(decode("plain-value"), "plain-value");
+        // A lone `%` with no valid hex escape is stable: percent-encoding
+        // leaves it as-is, so the loop detects the fixpoint and stops
+        // rather than spinning.
+        assert_eq!(decode("100%"), "100%");
+        // A literal percent sign in benign content survives one decode and
+        // is not mangled into something a detector would trip on.
+        assert_eq!(decode("discount=50%25off"), "discount=50%off");
     }
 
     #[test]
