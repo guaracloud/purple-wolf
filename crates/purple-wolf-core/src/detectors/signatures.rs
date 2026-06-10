@@ -56,6 +56,12 @@ impl SignatureDetector {
     /// Build a `SignatureDetector` with the compiled static signature set.
     pub fn new() -> SignatureDetector {
         let patterns: Vec<&str> = SIGNATURES.iter().map(|(p, _, _)| *p).collect();
+        // Audited panic site (crate denies `expect_used`): the input is the
+        // compile-time-constant `SIGNATURES` table, so a build failure here
+        // is a programmer error caught on the first test run, never a runtime
+        // condition reachable by request traffic. There is no meaningful
+        // recovery — a WAF with no signature matcher must not start.
+        #[allow(clippy::expect_used)]
         let matcher = AhoCorasick::builder()
             .ascii_case_insensitive(true)
             .build(&patterns)
@@ -98,6 +104,7 @@ impl Detector for SignatureDetector {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use std::net::IpAddr;
 

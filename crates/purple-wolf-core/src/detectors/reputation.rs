@@ -297,6 +297,7 @@ fn _silence_refcell_import_for_tests(_x: RefCell<()>) {}
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
     fn req_from(ip: &str) -> Request {

@@ -37,18 +37,22 @@ fn engine(cfg: &Config) -> Engine {
 }
 
 thread_local! {
-    static STATE: OnceCell<(Config, Engine)> = const { OnceCell::new() };
+    // (config, engine, on_fallback_config). `on_fallback_config` is true when
+    // the operator's Middleware config failed to parse and we built the
+    // all-monitor fallback — surfaced on every audit line so dashboards see
+    // that enforcement is silently off, not just at the one startup log.
+    static STATE: OnceCell<(Config, Engine, bool)> = const { OnceCell::new() };
 }
 
-fn state<R>(f: impl FnOnce(&Config, &Engine) -> R) -> R {
+fn state<R>(f: impl FnOnce(&Config, &Engine, bool) -> R) -> R {
     STATE.with(|s| {
-        let (cfg, engine_) = s.get_or_init(|| {
-            let cfg = match adapter::parse(&host::config()) {
+        let (cfg, engine_, fallback) = s.get_or_init(|| {
+            let (cfg, fallback) = match adapter::parse(&host::config()) {
                 Ok((cfg, warnings)) => {
                     for w in &warnings {
                         host::log(&format!("purple-wolf: {w}"));
                     }
-                    cfg
+                    (cfg, false)
                 }
                 Err(e) => {
                     host::log(&format!(
@@ -59,7 +63,7 @@ fn state<R>(f: impl FnOnce(&Config, &Engine) -> R) -> R {
                     // diagnose. Previously this constructed `groups: Default()`
                     // which silently disabled every detector — making a bad
                     // config a silent no-op WAF.
-                    Config {
+                    let cfg = Config {
                         mode: Mode::Monitor,
                         fail_mode: FailMode::FailOpen,
                         body: BodyConfig {
@@ -70,13 +74,14 @@ fn state<R>(f: impl FnOnce(&Config, &Engine) -> R) -> R {
                         reputation: ReputationConfig::default(),
                         xff: purple_wolf_core::config::XffConfig::default(),
                         labels: std::collections::BTreeMap::new(),
-                    }
+                    };
+                    (cfg, true)
                 }
             };
             let eng = engine(&cfg);
-            (cfg, eng)
+            (cfg, eng, fallback)
         });
-        f(cfg, engine_)
+        f(cfg, engine_, *fallback)
     })
 }
 
@@ -94,9 +99,14 @@ pub extern "C" fn handle_request() -> u64 {
             Action::Block => 0,
         },
         Err(_) => {
-            // Soft failure: detector panic.
+            // Soft failure: detector panic. NOTE: on `wasm32-wasip1`
+            // (panic = "abort") this arm is unreachable — a panic traps the
+            // guest before unwinding here. It runs only on native embeddings
+            // where unwinding works. See THREAT_MODEL.md §4.3 / workspace
+            // Cargo.toml. Panics are excluded structurally by the crate-level
+            // deny(clippy::unwrap_used/expect_used/panic) lints.
             host::log("purple-wolf: soft failure (panic) — applying fail mode");
-            state(|cfg, _engine_| match cfg.fail_mode {
+            state(|cfg, _engine_, _fallback| match cfg.fail_mode {
                 FailMode::FailOpen => 1u64,
                 FailMode::FailClosed => {
                     host::write_response(403, b"inspection failed (fail_closed)");
@@ -108,7 +118,7 @@ pub extern "C" fn handle_request() -> u64 {
 }
 
 fn inspect() -> Action {
-    state(|cfg, engine_| {
+    state(|cfg, engine_, fallback| {
         // Build header list (lowercased names; values are byte-faithful).
         let names = host::get_request_header_names();
         let headers: Vec<(String, String)> = names
@@ -178,8 +188,10 @@ fn inspect() -> Action {
         let verdicts = engine_.inspect(&req, &enabled);
         let decision = policy::decide(verdicts, cfg.mode, |g| group_mode(cfg, g));
 
-        // Audit log if anything to say.
-        let entry = AuditEntry::from_with_labels(&req, &decision, &cfg.labels);
+        // Audit log if anything to say. `config_fallback` makes every line
+        // announce that enforcement is off when we're on the fallback config.
+        let entry = AuditEntry::from_with_labels(&req, &decision, &cfg.labels)
+            .with_config_fallback(fallback);
         if entry.is_noteworthy() {
             host::log(&audit::to_log_line(&entry));
         }
@@ -267,6 +279,7 @@ pub extern "C" fn handle_response(_req_ctx: u32, _is_error: u32) {}
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::parse_peer;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 

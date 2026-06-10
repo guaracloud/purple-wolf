@@ -41,6 +41,14 @@ pub struct AuditEntry {
     /// labels — minimum churn for existing log queries.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// Whether the plugin is running on its all-monitor *fallback* config
+    /// because the operator's Middleware config failed to parse. When true,
+    /// nothing is being enforced regardless of the configured mode. Emitted
+    /// on every line (not just a one-time startup log) so dashboards and the
+    /// relay can alert continuously that enforcement is silently off.
+    /// `skip_serializing_if` keeps it out of the JSON in the normal case.
+    #[serde(skip_serializing_if = "is_false")]
+    pub config_fallback: bool,
 }
 
 impl AuditEntry {
@@ -90,12 +98,23 @@ impl AuditEntry {
                 .iter()
                 .map(|(k, v)| (k.clone(), scrub_label_value(v)))
                 .collect(),
+            config_fallback: false,
         }
     }
 
-    /// True if there is anything worth logging.
+    /// Mark whether this entry was produced while the plugin is running on
+    /// its all-monitor fallback config (operator config failed to parse).
+    /// Builder-style so existing call sites are unaffected.
+    pub fn with_config_fallback(mut self, fallback: bool) -> AuditEntry {
+        self.config_fallback = fallback;
+        self
+    }
+
+    /// True if there is anything worth logging. A fallback-config entry is
+    /// always worth logging — the operator needs to know enforcement is off
+    /// even on an otherwise-clean request.
     pub fn is_noteworthy(&self) -> bool {
-        self.blocked_rule.is_some() || !self.would_block_rules.is_empty()
+        self.blocked_rule.is_some() || !self.would_block_rules.is_empty() || self.config_fallback
     }
 }
 
@@ -134,6 +153,7 @@ pub fn to_log_line(entry: &AuditEntry) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use crate::detectors::{Group, Severity, Verdict};
     use std::net::IpAddr;
@@ -323,6 +343,33 @@ mod tests {
         let json = to_log_line(&entry);
         assert!(
             !json.contains("body_truncated"),
+            "field must be omitted when false: {json}"
+        );
+    }
+
+    // ── config_fallback audit signal (Tier 0.3) ─────────────────────────────
+
+    #[test]
+    fn audit_marks_config_fallback_when_set() {
+        // When the plugin is running on the all-monitor fallback config (a
+        // bad Middleware config), every audit line must say so — not just a
+        // single startup log line — so dashboards see enforcement is off.
+        let entry = AuditEntry::from(&req(), &block_decision()).with_config_fallback(true);
+        assert!(entry.config_fallback);
+        let json = to_log_line(&entry);
+        assert!(
+            json.contains(r#""config_fallback":true"#),
+            "json must include config_fallback when set: {json}"
+        );
+    }
+
+    #[test]
+    fn audit_omits_config_fallback_when_false_for_v02_backcompat() {
+        let entry = AuditEntry::from(&req(), &block_decision());
+        assert!(!entry.config_fallback);
+        let json = to_log_line(&entry);
+        assert!(
+            !json.contains("config_fallback"),
             "field must be omitted when false: {json}"
         );
     }

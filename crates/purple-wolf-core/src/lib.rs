@@ -34,6 +34,22 @@
 
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_crate_level_docs)]
+// Panic-surface discipline. Unwinding is unavailable on `wasm32-wasip1`
+// (`panic = "abort"`), so a panic in detection logic does not unwind into
+// the guest's `catch_unwind` — it traps the whole Wasm instance and the
+// request is handled by Traefik's plugin-failure path, *bypassing* the
+// configured `failMode`. The only robust defense is to structurally exclude
+// panics from production code paths. These denies enforce that; test modules
+// opt back out with `#![allow(...)]` since panicking is how tests assert.
+//
+// `clippy::indexing_slicing` is deliberately NOT denied: it fires on
+// provably-bounded slab/index access (e.g. the reputation LRU's intrusive
+// links) where `[]` is clearer than `.get().expect()` and would just trade
+// one lint for another. Reach for `.get()` on any *attacker-influenced*
+// index; the existing sites are internal invariants.
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::panic)]
+#![deny(clippy::expect_used)]
 
 pub mod audit;
 pub mod clock;

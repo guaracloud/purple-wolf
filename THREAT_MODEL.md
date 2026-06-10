@@ -200,19 +200,42 @@ padding can defeat body-only payload detection.
 `overCap: block` (correctness cost — any legitimate large upload
 returns 403).
 
-### 4.3 Fail-open paths are unmetered
+### 4.3 Fail-open paths, and the panic/trap reality
 
-Two paths fail open silently today:
+Paths that bypass detection without blocking:
 - libinjection returning `ERROR = -1` (`crates/purple-wolf-core/src/ffi.rs:23,33`).
   In practice libinjection's API never returns -1 for `is_sqli`; the
   XSS path can in pathological inputs. Both treat -1 as benign.
-- A detector panic caught by `catch_unwind` in
-  `crates/purple-wolf-traefik/src/entry.rs:73` applies
-  `failMode: failOpen` (default).
+- An over-cap body with `overCap: pass`. As of the robustness pass the
+  buffered prefix (the first `maxInspectBytes`) is now inspected and the
+  audit log carries `body_truncated: true`, so this is no longer a free
+  bypass (the payload must sit *past* the cap) and it is now visible — but
+  bytes beyond the cap still go un-inspected. See §4.2.
 
-Operators cannot tell from metrics how much traffic is bypassing
-detection via these paths. Future work: emit a `soft_failure: true`
-field on the audit log when either fires.
+**Panic handling — important correction.** Earlier docs claimed a detector
+panic is "caught by `catch_unwind` and `failMode` is applied." That is
+**false on the shipped guest.** The `wasm32-wasip1` target is
+`panic = "abort"` on stable Rust: unwinding does not exist there, so the
+`catch_unwind` in `crates/purple-wolf-traefik/src/entry.rs` cannot intercept
+a panic. A genuine panic *traps the whole Wasm instance*, and Traefik applies
+its own plugin-failure path (a 5xx) — which means a panic does **not** honor
+`failMode` and a `failOpen` deployment effectively fails *closed* on a
+panic-inducing input.
+
+The defense is therefore structural, not recovery-based: panics are excluded
+from production code by `deny(clippy::unwrap_used / expect_used / panic)` in
+each crate's `lib.rs` (the sole audited exception is the compile-time
+signature-table build), and fuzz targets (`fuzz/fuzz_targets/`) exist to
+surface any remaining panic path. The `catch_unwind` is retained only for
+native embeddings, where unwinding works.
+
+`failMode` *is* honored for the conditions that surface as `Result`/branch
+rather than panic: a poisoned reputation mutex (fails open, see
+`reputation.rs`) and the `overCap: block` decision.
+
+Operators still cannot tell from metrics exactly how much traffic hits the
+libinjection `-1` path. Future work: a `purple_wolf_health` counter line the
+relay can scrape, and a `soft_failure: true` audit field.
 
 ### 4.4 Detector order vs. severity in the audit log
 
@@ -230,8 +253,11 @@ preserves the rest, so no detection is lost.
 - `action: "allow"` count with non-empty `would_block_rules` — monitor-mode
   signal; use to tune before flipping to enforce.
 - Plugin failure rate from Traefik's metrics
-  (`traefik_middleware_request_total{code="500"}`) — should be near zero;
-  spikes indicate detector panics caught by `catch_unwind`.
+  (`traefik_middleware_request_total{code="500"}`) — should be near zero.
+  Because `wasm32-wasip1` is `panic = "abort"` (§4.3), a spike here means
+  detector panics are *trapping the guest* (not being caught), so requests
+  are failing closed regardless of `failMode`. Treat any sustained 5xx from
+  the middleware as a correctness bug to fix, not steady-state behavior.
 - `source_ip` cardinality from the audit log — sudden growth into the
   cap (50k entries by default) indicates IP-rotation DoS attempts.
 - `body.overCap` 403s — see §4.2.

@@ -354,6 +354,7 @@ pub fn parse(bytes: &[u8]) -> Result<(core::Config, Vec<String>), String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
     #[test]

@@ -114,6 +114,7 @@ fn truncate_bytes(s: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use std::net::IpAddr;
 

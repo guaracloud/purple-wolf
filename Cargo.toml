@@ -37,5 +37,14 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
-# panic = "unwind" (default) is kept on purpose: the entry shim uses
-# catch_unwind for per-request panic isolation (spec section 7).
+# NOTE: `wasm32-wasip1` is `panic = "abort"` on stable Rust — unwinding is
+# unavailable there regardless of this profile, so the entry shim's
+# `catch_unwind` CANNOT intercept a detector panic in the shipped guest: a
+# panic traps the whole Wasm instance and Traefik applies its plugin-failure
+# path, *bypassing* the configured `failMode`. We therefore do not rely on
+# unwinding for safety. Panics are instead structurally excluded from
+# production code by the `deny(clippy::unwrap_used / expect_used / panic)`
+# lints in each crate's `lib.rs`, and the fuzz targets exist to surface any
+# remaining panic path. The `catch_unwind` in the shim is retained only as a
+# belt-and-braces guard for native (non-wasm) embeddings, where unwinding
+# does work. See THREAT_MODEL.md §4.3.

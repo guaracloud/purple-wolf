@@ -329,6 +329,7 @@ pub fn client_ip(headers: &[(String, String)], peer: IpAddr, trust_hops: usize) 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
     fn ip() -> IpAddr {
