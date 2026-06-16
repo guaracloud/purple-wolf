@@ -1,4 +1,4 @@
-# purple-wolf v0.3 homelab one-shot test stack.
+# purple-wolf v0.4.1 homelab one-shot test stack.
 #
 # Apply with:
 #   kubectl apply -f examples/relay/k8s/homelab-test.yaml
@@ -17,23 +17,23 @@
 #
 #   ┌─ Pod ──────────────────────────────────────────────────────┐
 #   │ initContainer: stage-plugin                                │
-#   │   pulls ghcr.io/guaracloud/purple-wolf-wasm:main, copies   │
+#   │   pulls ghcr.io/guaracloud/purple-wolf-wasm:0.4.1, copies  │
 #   │   the .wasm + Traefik plugin manifest into a shared empty- │
 #   │   Dir at /plugins-local/src/.../purple-wolf/               │
 #   ├────────────────────────────────────────────────────────────┤
-#   │ whoami      :8000  — request echo (the "backend")          │
-#   │ traefik     :8080  — loads the WAF plugin, forwards to     │
+#   │ whoami      :8000  - request echo (the "backend")          │
+#   │ traefik     :8080  - loads the WAF plugin, forwards to     │
 #   │                       localhost:8000, writes audit lines   │
 #   │                       (host::log calls) to /shared/        │
 #   │                       traefik.log                          │
-#   │ relay       :9090  — log_tail source on /shared/traefik.   │
+#   │ relay       :9090  - log_tail source on /shared/traefik.   │
 #   │                       log → parse → HMAC → POST to         │
 #   │                       localhost:8090/webhook               │
-#   │ subscriber  :8090  — verifies HMAC, records each delivery  │
+#   │ subscriber  :8090  - verifies HMAC, records each delivery  │
 #   │                       to /shared/requests.jsonl            │
 #   └────────────────────────────────────────────────────────────┘
 #
-# This file is intentionally NOT under ArgoCD management — it's a
+# This file is intentionally NOT under ArgoCD management - it's a
 # manual test artifact. Delete with:
 #   kubectl delete -f examples/relay/k8s/homelab-test.yaml
 
@@ -70,7 +70,7 @@ data:
     # The wasm guest's host::log calls land in Traefik's main log.
     # Writing it to a shared file lets the relay's log_tail source
     # consume the stream directly. Default format = common, which
-    # leaves embedded JSON un-escaped — the relay parser depends on
+    # leaves embedded JSON un-escaped - the relay parser depends on
     # that to extract the purple-wolf audit envelope.
     log:
       filePath: /shared/traefik.log
@@ -96,7 +96,7 @@ data:
           plugin:
             purpleWolf:
               mode: enforce
-              # v0.3 labels — surface verbatim in every audit-log
+              # Free-form labels surface verbatim in every audit-log
               # line for this Middleware and ride into the relay
               # envelope as `labels:` at the top level.
               labels:
@@ -111,7 +111,7 @@ data:
     type: middleware
     runtime: wasm
     import: github.com/guaracloud/purple-wolf
-    summary: purple-wolf WAF — homelab test instance
+    summary: purple-wolf WAF - homelab test instance
     testData:
       mode: monitor
       labels:
@@ -251,13 +251,13 @@ spec:
       # Per-pod auth overrides the homelab's node-level GHCR
       # registries.yaml (which still has the placeholder PAT for
       # vicotrbb that lacks org access). The Secret is created
-      # out-of-band from `gh auth token` — see
+      # out-of-band from `gh auth token` - see
       # documentation/homelab-purple-wolf-test.md.
       imagePullSecrets:
         - name: ghcr-pull
       initContainers:
         - name: stage-plugin
-          image: ghcr.io/guaracloud/purple-wolf-wasm:main
+          image: ghcr.io/guaracloud/purple-wolf-wasm:0.4.1
           imagePullPolicy: Always
           # The wasm image is busybox-based (see crates/purple-wolf-
           # traefik/Dockerfile.wasm) so `cp` is available.
@@ -312,7 +312,7 @@ spec:
             limits: { memory: 256Mi }
 
         - name: relay
-          image: ghcr.io/guaracloud/purple-wolf-relay:main
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.1
           imagePullPolicy: Always
           args:
             - "--config=/etc/relay/relay.yaml"
@@ -432,7 +432,7 @@ metadata:
   name: pw-test
   namespace: purple-wolf-test
   annotations:
-    # Don't strip the path — Traefik's PathPrefix(`/`) matches all
+    # Don't strip the path - Traefik's PathPrefix(`/`) matches all
     # paths so we want them through verbatim.
     nginx.ingress.kubernetes.io/use-regex: "false"
 spec:

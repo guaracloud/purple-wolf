@@ -12,4 +12,4 @@ For larger changes, please open an issue first to discuss the approach.
 
 ## Security issues
 
-Please follow `SECURITY.md` — do not file public issues for vulnerabilities.
+Please follow `SECURITY.md` - do not file public issues for vulnerabilities.

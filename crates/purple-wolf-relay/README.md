@@ -8,10 +8,10 @@ The WAF (a Traefik http-wasm plugin) emits structured audit-log lines on
 every blocked or noteworthy request. The relay tails Traefik's log
 stream, parses the purple-wolf JSON envelope, applies optional label
 enrichment, and fans out HMAC-signed HTTP POST webhooks to one or more
-operator-configured subscribers — with retries, per-subscriber bounded
+operator-configured subscribers - with retries, per-subscriber bounded
 queues, and a dead-letter queue.
 
-**Status:** pre-1.0 — protocol stable, implementation evolving.
+**Status:** pre-1.0 - protocol stable, implementation evolving.
 
 - Protocol contract: [`docs/webhook-protocol.md`](../../docs/webhook-protocol.md)
 - Config reference: [`docs/configuration.md`](../../docs/configuration.md)

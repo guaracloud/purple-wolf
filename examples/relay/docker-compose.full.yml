@@ -1,11 +1,11 @@
 # End-to-end purple-wolf v0.4.1 simulation.
 #
 # Brings up:
-#   - upstream         — a stub HTTP server (the "real" backend)
-#   - traefik          — Traefik v3 with the purple-wolf WAF mounted
+#   - upstream         - a stub HTTP server (the "real" backend)
+#   - traefik          - Traefik v3 with the purple-wolf WAF mounted
 #                        as a local-plugin .wasm
-#   - relay            — purple-wolf-relay tailing Traefik's stdout
-#   - subscriber       — a tiny Python Flask webhook subscriber that
+#   - relay            - purple-wolf-relay tailing Traefik's stdout
+#   - subscriber       - a tiny Python Flask webhook subscriber that
 #                        verifies the HMAC, dedupes on event_id, and
 #                        prints each delivery
 #

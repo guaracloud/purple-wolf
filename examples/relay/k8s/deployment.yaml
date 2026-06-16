@@ -20,7 +20,7 @@ spec:
   replicas: 1
   strategy:
     # The pipeline is at-least-once; a brief gap during rollout is
-    # fine, double-delivery is worse — RollingUpdate with
+    # fine, double-delivery is worse - RollingUpdate with
     # maxUnavailable=1 is safer here than the default Recreate.
     type: RollingUpdate
     rollingUpdate:
@@ -100,7 +100,7 @@ spec:
             name: purple-wolf-relay-config
         - name: traefik-logs
           # Project the Traefik access log into the relay container.
-          # Wire this however your environment exposes Traefik logs —
+          # Wire this however your environment exposes Traefik logs -
           # a shared emptyDir / hostPath / sidecar tail, etc.
           emptyDir: {}
 ---

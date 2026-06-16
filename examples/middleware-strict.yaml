@@ -10,10 +10,10 @@ spec:
     purpleWolf:
       mode: enforce
       failMode: failOpen
-      # v0.3+: free-form labels echoed verbatim on every audit-log line
+      # Free-form labels are echoed verbatim on every audit-log line
       # produced by this Middleware. Use bounded dimensions (tenant,
       # service, environment, region). NEVER put per-user or per-request
-      # values here — see docs/configuration.md "Labels: Cardinality
+      # values here - see docs/configuration.md "Labels: Cardinality
       # warning". Keys: `^[a-z][a-z0-9_.-]{0,62}$`. Reserved prefix
       # `purple_wolf.*` is dropped silently by the WAF.
       labels:
@@ -30,7 +30,7 @@ spec:
         perSecond: 100
         denyList: []
       xff:
-        # Single Traefik in front of the plugin — peel one trusted hop so
+        # Single Traefik in front of the plugin - peel one trusted hop so
         # the reputation detector keys on the real client, not Traefik's IP.
         # Bump to 2-3 if you have additional trusted proxies (Cloudflare, ALB).
         # Leave at 0 if your route is exposed directly without a trusted edge.

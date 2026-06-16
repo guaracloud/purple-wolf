@@ -1,6 +1,6 @@
 # `purple-wolf.audit/v1` webhook protocol
 
-**Status:** stable — schema bumps require a documented migration window.
+**Status:** stable - schema bumps require a documented migration window.
 **Audience:** subscriber implementers. The relay sends; the subscriber receives.
 **Producer:** [`purple-wolf-relay`](../crates/purple-wolf-relay/) v0.1.0+.
 
@@ -49,7 +49,7 @@ Every webhook body is a single JSON object matching this shape:
 |---|---|---|---|
 | `schema` | string | yes | Always `"purple-wolf.audit/<MAJOR>"`. v1 today. Reject if the major doesn't match what your subscriber implements. |
 | `event_id` | ULID string | yes | **Stable across retries.** Subscribers MUST dedupe on this. |
-| `delivery_id` | ULID string | yes | **Changes per attempt.** Useful only for subscriber-side logging — do not use for dedup. |
+| `delivery_id` | ULID string | yes | **Changes per attempt.** Useful only for subscriber-side logging - do not use for dedup. |
 | `delivered_at` | RFC 3339 UTC | yes | When the relay started this attempt. Not the same as `event.*` timestamps. |
 | `attempt` | int ≥ 1 | yes | 1-based retry counter; matches the `X-PurpleWolf-Attempt` header. |
 | `labels` | object<string,string> | omitted-when-empty | Operator-supplied labels from the source Middleware. See [configuration.md §Labels](./configuration.md#labels). |
@@ -105,7 +105,7 @@ delivery failure). Configure your URL to be the final destination.
 | network error / connection reset | Retryable. |
 | timeout (default 30s) | Retryable. |
 
-Response bodies are not inspected — keep them small to save bandwidth.
+Response bodies are not inspected - keep them small to save bandwidth.
 
 ---
 
@@ -160,7 +160,7 @@ exactly-once) by deduping on `event_id`.
 - Store `event_id` for at least the relay's max retry window (default
   ~10 minutes for `max_attempts=8, max_delay_ms=600_000`). 24 hours is
   a safe default that absorbs longer outages on the subscriber side.
-- On a duplicate, respond `200 OK` with no side-effect — the relay
+- On a duplicate, respond `200 OK` with no side-effect - the relay
   treats this as "delivered" and stops retrying.
 
 **Recommended:**
@@ -367,10 +367,10 @@ export default app;
 - [ ] Support an overlap window during secret rotation. Two secrets
       simultaneously valid is the standard pattern.
 - [ ] Make your handler idempotent at the side-effect level (DB
-      writes, message emits) — dedup catches retries, idempotency
+      writes, message emits) - dedup catches retries, idempotency
       catches partial successes.
 - [ ] On unrecoverable application errors, return 5xx (the relay
-      retries) — not 4xx (the relay sends to DLQ).
+      retries) - not 4xx (the relay sends to DLQ).
 - [ ] Bind your endpoint TLS-only in production. The relay's HMAC
       gives integrity + authenticity, not confidentiality.
 

@@ -30,7 +30,7 @@ Use one of the following private channels instead:
 Please include:
 - Affected version (`cargo pkgid purple-wolf-core` or the GitHub
   release tag of the `.wasm` you're using).
-- A reproduction — ideally a curl command against a local
+- A reproduction - ideally a curl command against a local
   `tests/traefik_integration/` stack, or a minimal Rust snippet
   against `purple-wolf-core`.
 - The expected vs. observed behavior.
@@ -45,7 +45,7 @@ Please include:
   vulnerabilities with active exploitation get an expedited path.
 
 If you don't hear back within those windows, please ping
-`security@guaracloud.example` again — the most likely cause is that
+`security@guaracloud.example` again - the most likely cause is that
 the report was lost in transit, not ignored.
 
 ## Scope
@@ -53,7 +53,7 @@ the report was lost in transit, not ignored.
 The scope of "security vulnerability" for this project:
 
 **In scope:**
-- Detection bypasses — payloads that REVIEW-class detectors should
+- Detection bypasses - payloads that REVIEW-class detectors should
   catch per [THREAT_MODEL.md](THREAT_MODEL.md) §2 but don't.
 - Memory-safety issues in `crates/purple-wolf-core/src/ffi.rs` and the
   hand-rolled WASM host shim in
@@ -87,7 +87,7 @@ For accepted vulnerabilities we'll:
 3. Draft a fix + a CHANGELOG entry + a CVE request via GitHub Security
    Advisories.
 4. Publish the fix in a patch release tagged with the CVE number.
-5. Credit the reporter in the changelog (opt-in — say so in your
+5. Credit the reporter in the changelog (opt-in - say so in your
    report if you'd prefer to remain anonymous).
 
 Embargo period is negotiable case by case; default is "as soon as a
@@ -109,5 +109,5 @@ cosign verify-blob \
 
 The release workflow also runs `cosign verify-blob` against its own
 output as a fail-closed gate, so an artifact present on a Release
-page necessarily verified at build time — but verifying again at
+page necessarily verified at build time - but verifying again at
 deployment time is the only way to detect tampering after upload.

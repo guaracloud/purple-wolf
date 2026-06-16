@@ -4,7 +4,7 @@ The production chart is published as an OCI artifact:
 
 ```bash
 helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
-  --version <version> \
+  --version 0.4.1 \
   -f charts/purple-wolf/values.monitor.yaml
 ```
 
@@ -49,7 +49,7 @@ Install with:
 
 ```bash
 helm upgrade --install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
-  --version <version> \
+  --version 0.4.1 \
   -f values.monitor.yaml \
   -f values.subscriber.yaml
 ```

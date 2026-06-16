@@ -1,6 +1,6 @@
 # Homelab one-shot test deployment
 
-A real-world end-to-end smoke test of purple-wolf v0.3 (WAF + relay)
+A real-world end-to-end smoke test of purple-wolf v0.4.1 (WAF + relay)
 on a Kubernetes cluster. Drives live HTTP traffic through Traefik
 with the wasm plugin loaded, watches the relay deliver
 HMAC-signed webhooks to a recording subscriber, and reads back the
@@ -14,8 +14,8 @@ Kubernetes ≥1.27 with an HTTP IngressClass available.
 
 ## What it proves
 
-When the test passes, you have evidence that — in production
-topology — every layer of v0.3 works together:
+When the test passes, you have evidence that the production-style topology
+works end to end:
 
 - The WAF wasm plugin loads inside a real Traefik v3 (not a unit
   test, not docker-compose).
@@ -34,17 +34,17 @@ networking with a shared `emptyDir` at `/shared`.
 ```text
 ┌─ Pod (purple-wolf-test/pw-test) ────────────────────────────────┐
 │ initContainer: stage-plugin                                     │
-│   pulls ghcr.io/guaracloud/purple-wolf-wasm:main, copies the    │
+│   pulls ghcr.io/guaracloud/purple-wolf-wasm:0.4.1, copies the   │
 │   .wasm + Traefik plugin manifest into an emptyDir mounted at   │
 │   /plugins-local/src/github.com/guaracloud/purple-wolf/         │
 ├─────────────────────────────────────────────────────────────────┤
-│ whoami      :8000  — request echo (the "backend")               │
-│ traefik     :8080  — loads the WAF plugin, forwards to          │
+│ whoami      :8000  - request echo (the "backend")               │
+│ traefik     :8080  - loads the WAF plugin, forwards to          │
 │                       localhost:8000, writes host::log calls    │
 │                       to /shared/traefik.log                    │
-│ relay       :9090  — log_tail source on /shared/traefik.log →   │
+│ relay       :9090  - log_tail source on /shared/traefik.log →   │
 │                       parse → HMAC → POST localhost:8090/webhook│
-│ subscriber  :8090  — verifies HMAC, records each delivery to    │
+│ subscriber  :8090  - verifies HMAC, records each delivery to    │
 │                       /shared/requests.jsonl                    │
 └─────────────────────────────────────────────────────────────────┘
    ↑
@@ -63,16 +63,16 @@ rolling pods.
   - DNS that maps a `*.home` (or whatever you change it to) hostname
     to the ingress LB.
 - The two GHCR images, public-accessible from the cluster's nodes:
-  - `ghcr.io/guaracloud/purple-wolf-relay:main`
-  - `ghcr.io/guaracloud/purple-wolf-wasm:main`
-- `kubectl` configured for the right context. **Double-check** —
+  - `ghcr.io/guaracloud/purple-wolf-relay:0.4.1`
+  - `ghcr.io/guaracloud/purple-wolf-wasm:0.4.1`
+- `kubectl` configured for the right context. **Double-check** -
   this manifest is for a sandbox cluster, not production.
 
 > **GHCR auth on the homelab.** The K3s nodes have a
 > `/etc/rancher/k3s/registries.yaml` that pre-configures GHCR auth
 > with a personal PAT. If that PAT doesn't have access to the
-> `guaracloud` org packages, every pull returns 403 — even for
-> public images — because GHCR treats credential failure as an
+> `guaracloud` org packages, every pull returns 403 - even for
+> public images - because GHCR treats credential failure as an
 > explicit rejection rather than falling back to anonymous. The
 > workaround baked into the manifest is `imagePullSecrets:
 [ghcr-pull]`, a per-pod docker-registry Secret that overrides the
@@ -119,19 +119,19 @@ IP directly, like the example below).
 ```bash
 LB=<ingress-LB-IP>   # e.g. 192.168.50.200 for nginx-internal
 
-# benign — must pass
+# benign - must pass
 curl -sS -o /dev/null -w "benign      → HTTP %{http_code}\n" \
   -H 'Host: pw-test.home' "http://$LB/"
 
-# SQLi in query — must block
+# SQLi in query - must block
 curl -sS -o /dev/null -w "sqli        → HTTP %{http_code}\n" \
   -H 'Host: pw-test.home' "http://$LB/?id=1%27%20OR%20%271%27%3D%271"
 
-# XSS in query — must block
+# XSS in query - must block
 curl -sS -o /dev/null -w "xss         → HTTP %{http_code}\n" \
   -H 'Host: pw-test.home' "http://$LB/?q=%3Cscript%3Ealert(1)%3C/script%3E"
 
-# scanner User-Agent — must block
+# scanner User-Agent - must block
 curl -sS -o /dev/null -w "scanner_ua  → HTTP %{http_code}\n" \
   -H 'Host: pw-test.home' -H 'User-Agent: sqlmap/1.7' "http://$LB/"
 ```
@@ -174,6 +174,10 @@ curl -sS http://127.0.0.1:19090/readyz                    # {"status":"ready"}
 curl -sS http://127.0.0.1:19090/metrics | grep '^pwrelay_'
 kill $PF
 ```
+
+`/readyz` and `/healthz` stay unauthenticated even when relay admin auth is
+enabled. `/metrics` and `/version` are the admin endpoints protected by an
+optional bearer token.
 
 Sane values after driving the three attacks above:
 
