@@ -1,10 +1,12 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use purple_wolf_core::audit::AuditEntry;
 use purple_wolf_core::config::{GroupMode, Mode};
 use purple_wolf_core::detectors::{
     injection::InjectionDetector, signatures::SignatureDetector, structural::StructuralDetector,
     Detector, Engine, Group,
 };
 use purple_wolf_core::policy;
+use purple_wolf_core::policy::Action;
 use purple_wolf_core::request::Request;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -24,12 +26,38 @@ fn benign_request() -> Request {
     )
 }
 
+fn benign_bodyless_get() -> Request {
+    Request::build(
+        "GET",
+        "example.com",
+        "/healthz",
+        "",
+        vec![("user-agent".into(), "Mozilla/5.0".into())],
+        vec![],
+        false,
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 17)),
+    )
+}
+
 fn sqli_request() -> Request {
     Request::build(
         "GET",
         "example.com",
         "/search",
         "q=1' OR '1'='1",
+        vec![("user-agent".into(), "Mozilla/5.0".into())],
+        vec![],
+        false,
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 17)),
+    )
+}
+
+fn signature_request() -> Request {
+    Request::build(
+        "GET",
+        "example.com",
+        "/download",
+        "file=../../etc/passwd",
         vec![("user-agent".into(), "Mozilla/5.0".into())],
         vec![],
         false,
@@ -53,6 +81,14 @@ fn bench(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("inspect/benign_bodyless_get", |b| {
+        b.iter(|| {
+            let r = benign_bodyless_get();
+            let v = engine.inspect(&r, black_box(groups));
+            let _ = policy::decide(v, Mode::Enforce, |_| GroupMode::Enforce);
+        })
+    });
+
     c.bench_function("inspect/sqli", |b| {
         b.iter(|| {
             let r = sqli_request();
@@ -61,11 +97,31 @@ fn bench(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("inspect/signature_hit", |b| {
+        b.iter(|| {
+            let r = signature_request();
+            let v = engine.inspect(&r, black_box(groups));
+            let _ = policy::decide(v, Mode::Enforce, |_| GroupMode::Enforce);
+        })
+    });
+
+    c.bench_function("audit/noteworthy_block", |b| {
+        b.iter(|| {
+            let r = sqli_request();
+            let v = engine.inspect(&r, black_box(groups));
+            let decision = policy::decide(v, Mode::Enforce, |_| GroupMode::Enforce);
+            if black_box(decision.action) == Action::Block {
+                let _ = AuditEntry::from(&r, &decision);
+            }
+        })
+    });
+
     c.bench_function("detector/injection", |b| {
         b.iter(|| InjectionDetector.inspect(&sqli_request()))
     });
+    let signature_detector = SignatureDetector::new();
     c.bench_function("detector/signatures", |b| {
-        b.iter(|| SignatureDetector::new().inspect(&sqli_request()))
+        b.iter(|| signature_detector.inspect(&signature_request()))
     });
 }
 

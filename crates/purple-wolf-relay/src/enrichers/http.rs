@@ -6,14 +6,13 @@
 //! cached per (url, value) with a TTL so a downstream catalog can be
 //! moderately slow without becoming a single point of latency.
 //!
-//! v0.3 uses an unbounded HashMap for the cache. Cardinality is
-//! bounded in practice by the operator's label values; if a deployment
-//! has truly high cardinality, the operator can disable caching by
-//! setting `cache_ttl_s: 0`.
+//! The cache is bounded by both TTL and capacity. High-cardinality label
+//! values therefore cannot grow relay memory without bound; operators can
+//! disable caching entirely with `cache_ttl_s: 0` or `cache_capacity: 0`.
 
 use async_trait::async_trait;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -55,12 +54,98 @@ pub struct HttpEnricher {
     timeout: Duration,
     cache_ttl: Duration,
     client: reqwest::Client,
-    cache: Mutex<HashMap<String, CacheEntry>>,
+    cache: Mutex<Cache>,
+}
+
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<String, CacheEntry>,
+    lru: VecDeque<String>,
+    capacity: usize,
 }
 
 struct CacheEntry {
     labels: BTreeMap<String, String>,
     expires_at: Instant,
+}
+
+impl Cache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(capacity),
+            lru: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, value: &str, now: Instant) -> Option<BTreeMap<String, String>> {
+        let entry = self.entries.get(value)?;
+        if now >= entry.expires_at {
+            self.entries.remove(value);
+            remove_lru_key(&mut self.lru, value);
+            return None;
+        }
+        let labels = entry.labels.clone();
+        self.touch(value);
+        Some(labels)
+    }
+
+    fn put(&mut self, value: String, labels: BTreeMap<String, String>, expires_at: Instant) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.evict_expired(Instant::now());
+        if let Some(entry) = self.entries.get_mut(&value) {
+            entry.labels = labels;
+            entry.expires_at = expires_at;
+            self.touch(&value);
+            return;
+        }
+        while self.entries.len() >= self.capacity {
+            if let Some(oldest) = self.lru.pop_front() {
+                self.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        self.lru.push_back(value.clone());
+        self.entries
+            .insert(value, CacheEntry { labels, expires_at });
+    }
+
+    fn evict_expired(&mut self, now: Instant) {
+        let expired: Vec<String> = self
+            .entries
+            .iter()
+            .filter_map(|(key, entry)| {
+                if now >= entry.expires_at {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for key in expired {
+            self.entries.remove(&key);
+            remove_lru_key(&mut self.lru, &key);
+        }
+    }
+
+    fn touch(&mut self, value: &str) {
+        remove_lru_key(&mut self.lru, value);
+        self.lru.push_back(value.to_string());
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn remove_lru_key(lru: &mut VecDeque<String>, value: &str) {
+    if let Some(pos) = lru.iter().position(|key| key == value) {
+        lru.remove(pos);
+    }
 }
 
 impl HttpEnricher {
@@ -69,6 +154,7 @@ impl HttpEnricher {
         url_template: String,
         timeout: Duration,
         cache_ttl: Duration,
+        cache_capacity: usize,
     ) -> Self {
         // A single client per enricher amortizes connection pooling
         // across calls. Default timeout on the client mirrors our
@@ -84,29 +170,24 @@ impl HttpEnricher {
             timeout,
             cache_ttl,
             client,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(Cache::new(cache_capacity)),
         }
     }
 
     fn cache_get(&self, value: &str) -> Option<BTreeMap<String, String>> {
-        let cache = self.cache.lock().unwrap();
-        let e = cache.get(value)?;
-        if Instant::now() < e.expires_at {
-            Some(e.labels.clone())
-        } else {
-            None
-        }
+        self.cache.lock().unwrap().get(value, Instant::now())
     }
 
     fn cache_put(&self, value: String, labels: BTreeMap<String, String>) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.insert(
-            value,
-            CacheEntry {
-                labels,
-                expires_at: Instant::now() + self.cache_ttl,
-            },
-        );
+        self.cache
+            .lock()
+            .unwrap()
+            .put(value, labels, Instant::now() + self.cache_ttl);
+    }
+
+    #[cfg(test)]
+    fn cache_len(&self) -> usize {
+        self.cache.lock().unwrap().len()
     }
 }
 
@@ -194,6 +275,7 @@ mod tests {
             format!("{}/tenants/{{value}}/labels", mock.uri()),
             Duration::from_millis(500),
             Duration::from_secs(60),
+            1024,
         );
         let mut labels = BTreeMap::from([("tenant".into(), "acme".into())]);
         enricher
@@ -216,6 +298,7 @@ mod tests {
             format!("{}/{{value}}", mock.uri()),
             Duration::from_millis(500),
             Duration::from_secs(60),
+            1024,
         );
         let mut labels = BTreeMap::from([("tenant".into(), "acme".into())]);
         enricher
@@ -241,6 +324,7 @@ mod tests {
             format!("{}/{{value}}", mock.uri()),
             Duration::from_millis(500),
             Duration::from_secs(60),
+            1024,
         );
         for _ in 0..2 {
             let mut labels = BTreeMap::from([("tenant".into(), "acme".into())]);
@@ -252,6 +336,29 @@ mod tests {
         // The wiremock `.expect(1)` assertion is verified on drop.
     }
 
+    #[test]
+    fn http_enricher_cache_is_capacity_bounded_and_lru() {
+        let enricher = HttpEnricher::new(
+            "tenant".into(),
+            "https://catalog.internal/{value}".into(),
+            Duration::from_millis(500),
+            Duration::from_secs(60),
+            2,
+        );
+        enricher.cache_put("a".into(), BTreeMap::from([("owner".into(), "a".into())]));
+        enricher.cache_put("b".into(), BTreeMap::from([("owner".into(), "b".into())]));
+        assert!(enricher.cache_get("a").is_some(), "a is now most recent");
+        enricher.cache_put("c".into(), BTreeMap::from([("owner".into(), "c".into())]));
+
+        assert_eq!(enricher.cache_len(), 2);
+        assert!(enricher.cache_get("a").is_some());
+        assert!(
+            enricher.cache_get("b").is_none(),
+            "least recent entry evicted"
+        );
+        assert!(enricher.cache_get("c").is_some());
+    }
+
     #[tokio::test]
     async fn http_enricher_skips_when_label_absent() {
         let mock = MockServer::start().await;
@@ -261,6 +368,7 @@ mod tests {
             format!("{}/{{value}}", mock.uri()),
             Duration::from_millis(500),
             Duration::from_secs(60),
+            1024,
         );
         let mut labels = BTreeMap::from([("other".into(), "x".into())]);
         enricher
@@ -313,6 +421,7 @@ mod tests {
             format!("{}/{{value}}", mock.uri()),
             Duration::from_millis(500),
             Duration::from_secs(60),
+            1024,
         );
         let mut labels = BTreeMap::from([
             ("tenant".into(), "acme".into()),

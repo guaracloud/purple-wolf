@@ -5,7 +5,7 @@
 use crate::{config as adapter, host};
 use purple_wolf_core::{
     audit::{self, AuditEntry},
-    config::{BodyConfig, Config, FailMode, Mode, OverCap, ReputationConfig},
+    config::{BodyConfig, Config, FailMode, GroupMode, Mode, OverCap, ReputationConfig},
     detectors::{
         injection::InjectionDetector, reputation::ReputationDetector,
         signatures::SignatureDetector, structural::StructuralDetector, Engine, Group,
@@ -37,16 +37,48 @@ fn engine(cfg: &Config) -> Engine {
 }
 
 thread_local! {
-    // (config, engine, on_fallback_config). `on_fallback_config` is true when
-    // the operator's Middleware config failed to parse and we built the
-    // all-monitor fallback — surfaced on every audit line so dashboards see
-    // that enforcement is silently off, not just at the one startup log.
-    static STATE: OnceCell<(Config, Engine, bool)> = const { OnceCell::new() };
+    static STATE: OnceCell<PluginState> = const { OnceCell::new() };
 }
 
-fn state<R>(f: impl FnOnce(&Config, &Engine, bool) -> R) -> R {
+struct PluginState {
+    cfg: Config,
+    engine: Engine,
+    fallback: bool,
+    enabled_groups: Vec<Group>,
+    group_modes: EffectiveGroupModes,
+}
+
+#[derive(Clone, Copy)]
+struct EffectiveGroupModes {
+    injection: GroupMode,
+    signatures: GroupMode,
+    structural: GroupMode,
+    reputation: GroupMode,
+}
+
+impl EffectiveGroupModes {
+    fn from_config(cfg: &Config) -> Self {
+        Self {
+            injection: effective_group_mode(cfg, Group::Injection),
+            signatures: effective_group_mode(cfg, Group::Signatures),
+            structural: effective_group_mode(cfg, Group::Structural),
+            reputation: effective_group_mode(cfg, Group::Reputation),
+        }
+    }
+
+    fn get(self, group: Group) -> GroupMode {
+        match group {
+            Group::Injection => self.injection,
+            Group::Signatures => self.signatures,
+            Group::Structural => self.structural,
+            Group::Reputation => self.reputation,
+        }
+    }
+}
+
+fn state<R>(f: impl FnOnce(&PluginState) -> R) -> R {
     STATE.with(|s| {
-        let (cfg, engine_, fallback) = s.get_or_init(|| {
+        let state = s.get_or_init(|| {
             let (cfg, fallback) = match adapter::parse(&host::config()) {
                 Ok((cfg, warnings)) => {
                     for w in &warnings {
@@ -78,10 +110,26 @@ fn state<R>(f: impl FnOnce(&Config, &Engine, bool) -> R) -> R {
                     (cfg, true)
                 }
             };
-            let eng = engine(&cfg);
-            (cfg, eng, fallback)
+            let engine = engine(&cfg);
+            let group_modes = EffectiveGroupModes::from_config(&cfg);
+            let enabled_groups: Vec<Group> = [
+                Group::Injection,
+                Group::Signatures,
+                Group::Structural,
+                Group::Reputation,
+            ]
+            .into_iter()
+            .filter(|group| group_modes.get(*group) != GroupMode::Off)
+            .collect();
+            PluginState {
+                cfg,
+                engine,
+                fallback,
+                enabled_groups,
+                group_modes,
+            }
         });
-        f(cfg, engine_, *fallback)
+        f(state)
     })
 }
 
@@ -106,7 +154,7 @@ pub extern "C" fn handle_request() -> u64 {
             // Cargo.toml. Panics are excluded structurally by the crate-level
             // deny(clippy::unwrap_used/expect_used/panic) lints.
             host::log("purple-wolf: soft failure (panic) — applying fail mode");
-            state(|cfg, _engine_, _fallback| match cfg.fail_mode {
+            state(|state| match state.cfg.fail_mode {
                 FailMode::FailOpen => 1u64,
                 FailMode::FailClosed => {
                     host::write_response(403, b"inspection failed (fail_closed)");
@@ -118,7 +166,8 @@ pub extern "C" fn handle_request() -> u64 {
 }
 
 fn inspect() -> Action {
-    state(|cfg, engine_, fallback| {
+    state(|state| {
+        let cfg = &state.cfg;
         // Build header list (lowercased names; values are byte-faithful).
         let names = host::get_request_header_names();
         let headers: Vec<(String, String)> = names
@@ -147,11 +196,16 @@ fn inspect() -> Action {
             .map(|(_, v)| v.clone())
             .unwrap_or_default();
 
-        // Body (capped). `read_request_body` buffers at most `cap` bytes;
-        // `over_cap` is true when the request carried more.
+        // Body (capped). Skip the host body stream only when headers prove
+        // there cannot be a body; otherwise inspect the buffered prefix.
         let cap = cfg.body.max_inspect_bytes;
-        let body = host::read_request_body(cap);
-        let over_cap = host::request_body_exceeded(cap);
+        let no_body = request_headers_prove_no_body(&headers);
+        let body_read = if no_body {
+            host::BodyRead::default()
+        } else {
+            host::read_request_body(cap)
+        };
+        let over_cap = body_read.exceeded;
         if over_cap && cfg.body.over_cap == OverCap::Block {
             host::write_response(403, b"body exceeds inspection cap");
             return Action::Block;
@@ -164,28 +218,25 @@ fn inspect() -> Action {
         // the cap rather than merely inflate the body; `body_truncated` records
         // in the audit log that bytes beyond the cap went un-inspected.
         let req = Request::build(
-            &method, &host_hdr, &path, &raw_query, headers, body, true, source_ip,
+            &method,
+            &host_hdr,
+            &path,
+            &raw_query,
+            headers,
+            body_read.bytes,
+            !no_body,
+            source_ip,
         )
         .with_truncated_body(over_cap);
 
-        let enabled: Vec<Group> = [
-            Group::Injection,
-            Group::Signatures,
-            Group::Structural,
-            Group::Reputation,
-        ]
-        .into_iter()
-        .filter(|g| group_enabled(cfg, *g))
-        .collect();
-
-        let verdicts = engine_.inspect(&req, &enabled);
-        let decision = policy::decide(verdicts, cfg.mode, |g| group_mode(cfg, g));
+        let verdicts = state.engine.inspect(&req, &state.enabled_groups);
+        let decision = policy::decide(verdicts, cfg.mode, |g| state.group_modes.get(g));
 
         // Audit log if anything to say. `config_fallback` makes every line
         // announce that enforcement is off when we're on the fallback config.
-        let entry = AuditEntry::from_with_labels(&req, &decision, &cfg.labels)
-            .with_config_fallback(fallback);
-        if entry.is_noteworthy() {
+        if decision_is_noteworthy(&decision, state.fallback) {
+            let entry = AuditEntry::from_with_labels(&req, &decision, &cfg.labels)
+                .with_config_fallback(state.fallback);
             host::log(&audit::to_log_line(&entry));
         }
 
@@ -199,12 +250,11 @@ fn inspect() -> Action {
     })
 }
 
-fn group_enabled(cfg: &Config, g: Group) -> bool {
-    group_mode(cfg, g) != purple_wolf_core::config::GroupMode::Off
+fn decision_is_noteworthy(decision: &policy::Decision, fallback: bool) -> bool {
+    decision.blocked_by.is_some() || !decision.would_block.is_empty() || fallback
 }
 
-fn group_mode(cfg: &Config, g: Group) -> purple_wolf_core::config::GroupMode {
-    use purple_wolf_core::config::GroupMode;
+fn effective_group_mode(cfg: &Config, g: Group) -> GroupMode {
     let gc = match g {
         Group::Injection => cfg.groups.injection.as_ref(),
         Group::Signatures => cfg.groups.signatures.as_ref(),
@@ -214,6 +264,24 @@ fn group_mode(cfg: &Config, g: Group) -> purple_wolf_core::config::GroupMode {
     match gc {
         Some(g) if g.enabled => g.mode,
         _ => GroupMode::Off,
+    }
+}
+
+fn request_headers_prove_no_body(headers: &[(String, String)]) -> bool {
+    let mut content_length = None;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("transfer-encoding") && !value.trim().is_empty() {
+            return false;
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = Some(value.as_str());
+        }
+    }
+    match content_length {
+        None => true,
+        Some(value) => value
+            .split(',')
+            .all(|part| part.trim().parse::<u64>().is_ok_and(|n| n == 0)),
     }
 }
 
@@ -273,7 +341,7 @@ pub extern "C" fn handle_response(_req_ctx: u32, _is_error: u32) {}
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-    use super::parse_peer;
+    use super::{parse_peer, request_headers_prove_no_body};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
@@ -327,5 +395,31 @@ mod tests {
             parse_peer("not-an-ip:5555"),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
         );
+    }
+
+    #[test]
+    fn no_body_fast_path_requires_absent_or_zero_length_and_no_transfer_encoding() {
+        assert!(request_headers_prove_no_body(&[]));
+        assert!(request_headers_prove_no_body(&[(
+            "content-length".into(),
+            "0".into()
+        )]));
+        assert!(request_headers_prove_no_body(&[(
+            "content-length".into(),
+            "0, 0".into()
+        )]));
+
+        assert!(!request_headers_prove_no_body(&[(
+            "content-length".into(),
+            "12".into()
+        )]));
+        assert!(!request_headers_prove_no_body(&[(
+            "content-length".into(),
+            "not-a-number".into()
+        )]));
+        assert!(!request_headers_prove_no_body(&[(
+            "transfer-encoding".into(),
+            "chunked".into()
+        )]));
     }
 }

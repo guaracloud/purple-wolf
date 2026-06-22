@@ -102,21 +102,14 @@ pub fn get_request_header(name: &str) -> Option<String> {
     Some(joined)
 }
 
-/// Read at most `max` bytes of the request body (truncates at the cap).
+/// Read at most `max` bytes of the request body (truncates at the cap) and
+/// return both the buffered prefix and whether more bytes existed.
 ///
-/// The body is consumed from the host stream; pair this call with
-/// [`request_body_exceeded`] which inspects the same cached read result. Both
-/// share an internal cache keyed by `max` so callers may invoke them in any
-/// order, but the host stream is only drained once per request.
-pub fn read_request_body(max: usize) -> Vec<u8> {
-    body_cache_get_or_drain(max).bytes.clone()
-}
-
-/// True iff the request body length exceeds `max` (i.e. [`read_request_body`]
-/// truncated it). Reading the body and this predicate share state — see
-/// [`read_request_body`].
-pub fn request_body_exceeded(max: usize) -> bool {
-    body_cache_get_or_drain(max).exceeded
+/// This is intentionally one API: the http-wasm body stream is consumed as it
+/// is read, so callers should make a single capped read and carry both pieces
+/// of state through request construction and over-cap policy.
+pub fn read_request_body(max: usize) -> BodyRead {
+    drain_request_body(max)
 }
 
 /// `ip:port` form of the TCP peer the host saw.
@@ -158,7 +151,6 @@ pub fn response_taken() -> bool {
 /// the start of every `handle_request`.
 pub fn reset_response_taken() {
     set_response_taken(false);
-    body_cache_reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -463,16 +455,15 @@ fn drain_request_body(_max: usize) -> BodyRead {
 // scenarios — which Task 17's entry point already does at request start.
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Default)]
-struct BodyRead {
-    bytes: Vec<u8>,
-    exceeded: bool,
+#[derive(Debug, Default)]
+pub struct BodyRead {
+    pub bytes: Vec<u8>,
+    pub exceeded: bool,
 }
 
 #[derive(Default)]
 struct State {
     response_taken: bool,
-    body: Option<(usize, BodyRead)>, // (max, result)
 }
 
 thread_local! {
@@ -489,29 +480,4 @@ fn set_response_taken(v: bool) {
 
 fn mark_response_taken() {
     set_response_taken(true);
-}
-
-fn body_cache_reset() {
-    STATE.with(|s| s.borrow_mut().body = None);
-}
-
-fn body_cache_get_or_drain(max: usize) -> BodyRead {
-    STATE.with(|s| {
-        let mut state = s.borrow_mut();
-        if let Some((cached_max, ref body)) = state.body {
-            // The host body stream is consumed by the first `read_body` loop,
-            // so we deliberately ignore a changed `max` and return the cached
-            // result. Callers should pick one cap per request from config and
-            // stick with it; the debug-assert catches accidental drift in
-            // tests without trapping in production wasm.
-            debug_assert_eq!(
-                cached_max, max,
-                "body_cache: max changed within a single request (was {cached_max}, now {max}); the host stream is already drained, returning cached result"
-            );
-            return body.clone();
-        }
-        let fresh = drain_request_body(max);
-        state.body = Some((max, fresh.clone()));
-        fresh
-    })
 }

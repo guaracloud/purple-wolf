@@ -15,13 +15,14 @@
 //! re-emitted, and events written during the down period are
 //! delivered.
 //!
-//! Future work can switch to inotify/FSEvents via `notify` to avoid the
-//! 100ms polling latency; the current poll is simple and matches the
-//! roughly-once-per-second cadence of real audit-line traffic.
+//! File-change wakeups use `notify` when the platform watcher can be created,
+//! with the 100ms poll retained as a fallback for missed events or unsupported
+//! filesystems.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
+use notify::Watcher;
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader, SeekFrom};
@@ -86,6 +87,7 @@ pub(crate) async fn run_tail(
     let mut buf = String::new();
     let mut position = reader.get_mut().stream_position().await?;
     let mut emitted_since_bookmark: u64 = 0;
+    let mut file_watcher = file_change_watcher(&path);
 
     tracing::info!(
         source = %source_id,
@@ -107,11 +109,9 @@ pub(crate) async fn run_tail(
             res = reader.read_line(&mut buf) => {
                 match res {
                     Ok(0) => {
-                        // EOF — sleep, check rotation, then retry.
-                        if tokio::time::timeout(
-                            tokio::time::Duration::from_millis(POLL_INTERVAL_MS),
-                            shutdown.recv()
-                        ).await.is_ok() {
+                        // EOF — wait for a file-change wakeup (or poll fallback),
+                        // check rotation, then retry.
+                        if wait_for_tail_wakeup(&mut file_watcher, &mut shutdown).await {
                             // Shutdown arrived during the wait.
                             tracing::info!(source = %source_id, "log_tail shutting down");
                             let _ = persist_bookmark(&bookmark_path, position, inode).await;
@@ -161,6 +161,66 @@ pub(crate) async fn run_tail(
                     }
                 }
             }
+        }
+    }
+}
+
+struct FileChangeWatcher {
+    #[allow(dead_code)]
+    watcher: notify::RecommendedWatcher,
+    rx: mpsc::Receiver<()>,
+}
+
+fn file_change_watcher(path: &Path) -> Option<FileChangeWatcher> {
+    let (tx, rx) = mpsc::channel(1);
+    let mut watcher = match notify::recommended_watcher(
+        move |event: notify::Result<notify::Event>| {
+            if event.is_ok() {
+                let _ = tx.try_send(());
+            }
+        },
+    ) {
+        Ok(watcher) => watcher,
+        Err(e) => {
+            tracing::debug!(path = %path.display(), error = %e, "log_tail notify watcher unavailable; polling");
+            return None;
+        }
+    };
+    let watch_path = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(path);
+    if let Err(e) = watcher.watch(watch_path, notify::RecursiveMode::NonRecursive) {
+        tracing::debug!(
+            path = %path.display(),
+            watch_path = %watch_path.display(),
+            error = %e,
+            "log_tail notify watch failed; polling"
+        );
+        return None;
+    }
+    Some(FileChangeWatcher { watcher, rx })
+}
+
+async fn wait_for_tail_wakeup(
+    watcher: &mut Option<FileChangeWatcher>,
+    shutdown: &mut broadcast::Receiver<()>,
+) -> bool {
+    let poll = tokio::time::sleep(tokio::time::Duration::from_millis(POLL_INTERVAL_MS));
+    tokio::pin!(poll);
+
+    if let Some(watcher) = watcher.as_mut() {
+        tokio::select! {
+            biased;
+            _ = shutdown.recv() => true,
+            _ = watcher.rx.recv() => false,
+            _ = &mut poll => false,
+        }
+    } else {
+        tokio::select! {
+            biased;
+            _ = shutdown.recv() => true,
+            _ = &mut poll => false,
         }
     }
 }

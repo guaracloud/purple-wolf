@@ -10,7 +10,7 @@
 //!                        ↓
 //!                  fan-out task
 //!                        ↓
-//!   N per-subscriber mpsc<Envelope>(subscriber_queue) → N sink tasks
+//!   N per-subscriber mpsc<Arc<Envelope>>(subscriber_queue) → N sink tasks
 //! ```
 //!
 //! Backpressure policy: if a subscriber's per-subscriber mpsc is
@@ -80,7 +80,7 @@ pub async fn run(
             .to_vec();
         let dlq = Arc::new(crate::subscribers::dlq::Dlq::new(1000));
         let cfg: HttpSinkConfig = config_from(s, secret, dlq, Some(metrics.clone()));
-        let (tx, rx) = mpsc::channel::<Envelope>(subscriber_queue);
+        let (tx, rx) = mpsc::channel::<Arc<Envelope>>(subscriber_queue);
         let filter = CompiledFilter::compile(&s.filter);
         let id = cfg.id.clone();
         let sink_shutdown = shutdown.resubscribe();
@@ -256,7 +256,7 @@ async fn process_one(
         "envelope built; fanning out"
     );
 
-    fan_out(&env, subs, metrics).await;
+    fan_out(Arc::new(env), subs, metrics).await;
 }
 
 /// Pull `labels` out of the parsed audit JSON into a `BTreeMap`.
@@ -280,14 +280,14 @@ fn take_labels(event: &mut serde_json::Value) -> BTreeMap<String, String> {
 struct PerSubscriber {
     id: String,
     filter: CompiledFilter,
-    tx: mpsc::Sender<Envelope>,
+    tx: mpsc::Sender<Arc<Envelope>>,
     #[allow(dead_code)]
     sink_handle: tokio::task::JoinHandle<()>,
 }
 
-async fn fan_out(env: &Envelope, subs: &mut [PerSubscriber], metrics: &Arc<Metrics>) {
+async fn fan_out(env: Arc<Envelope>, subs: &mut [PerSubscriber], metrics: &Arc<Metrics>) {
     for sub in subs.iter_mut() {
-        if !sub.filter.matches(env) {
+        if !sub.filter.matches(&env) {
             continue;
         }
         metrics
@@ -296,7 +296,7 @@ async fn fan_out(env: &Envelope, subs: &mut [PerSubscriber], metrics: &Arc<Metri
             .inc();
         // Non-blocking try_send so a slow subscriber's full queue
         // can't backpressure the fan-out. Drop + count on full.
-        match sub.tx.try_send(env.clone()) {
+        match sub.tx.try_send(Arc::clone(&env)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 metrics
@@ -327,6 +327,9 @@ async fn fan_out(env: &Envelope, subs: &mut [PerSubscriber], metrics: &Arc<Metri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SubscriberFilter;
+    use crate::envelope::EnvelopeSource;
+    use std::sync::Arc;
 
     #[test]
     fn take_labels_promotes_string_map() {
@@ -358,5 +361,33 @@ mod tests {
         let labels = take_labels(&mut v);
         assert_eq!(labels.len(), 1, "non-string values must be dropped");
         assert_eq!(labels.get("tenant").map(String::as_str), Some("acme"));
+    }
+
+    #[tokio::test]
+    async fn fan_out_sends_arc_envelope_to_matching_subscriber() {
+        let env = Arc::new(Envelope::new(
+            serde_json::json!({"action": "block"}),
+            EnvelopeSource {
+                middleware: None,
+                router: None,
+                entry_point: None,
+                relay_instance: "r".into(),
+            },
+            BTreeMap::new(),
+        ));
+        let event_id = env.event_id.clone();
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut subs = vec![PerSubscriber {
+            id: "sub".into(),
+            filter: CompiledFilter::compile(&SubscriberFilter::default()),
+            tx,
+            sink_handle: tokio::spawn(async {}),
+        }];
+        let metrics = Arc::new(Metrics::new().unwrap());
+
+        fan_out(env, &mut subs, &metrics).await;
+
+        let received = rx.recv().await.expect("envelope should be queued");
+        assert_eq!(received.event_id, event_id);
     }
 }

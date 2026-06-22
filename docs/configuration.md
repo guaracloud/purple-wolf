@@ -128,6 +128,25 @@ attribution go to the TCP peer.
   subscriber side. Wire protocol:
   [docs/webhook-protocol.md](./webhook-protocol.md).
 
+### Relay HTTP enrichment cache
+
+HTTP enrichers cache successful label lookups by substituted label value.
+The cache is bounded by both TTL and capacity:
+
+```yaml
+enrichments:
+  - type: http
+    on_label: tenant
+    url: https://catalog.internal/tenants/{value}/labels
+    timeout_ms: 500
+    cache_ttl_s: 300
+    cache_capacity: 1024
+```
+
+Set `cache_ttl_s: 0` or `cache_capacity: 0` to disable caching. Enrichment
+failures remain non-fatal; the relay logs the failure and delivers the
+unenriched envelope.
+
 ## Detection coverage and limitations
 
 `purple-wolf` uses a hybrid engine: libinjection for SQLi/XSS (context-aware

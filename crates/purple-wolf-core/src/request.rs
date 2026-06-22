@@ -154,16 +154,22 @@ impl Request {
     ///
     /// Headers are appended last so test/detector ordering stays stable
     /// for path/query/body assertions.
-    pub fn inspectable_fields(&self) -> Vec<&[u8]> {
-        let mut out: Vec<&[u8]> = vec![self.path.as_bytes()];
-        for (_, v) in &self.query_params {
-            out.push(v.as_bytes());
+    pub fn inspectable_fields(&self) -> InspectableFields<'_> {
+        InspectableFields {
+            req: self,
+            phase: InspectablePhase::Path,
+            query_idx: 0,
+            header_idx: 0,
         }
-        if self.body_inspected {
-            out.push(self.body.as_slice());
+    }
+
+    /// Visit every inspectable field in stable detector order without
+    /// allocating. Useful for detectors that want an early-exit scan while
+    /// preserving the same field set as [`Request::inspectable_fields`].
+    pub fn visit_inspectable_fields(&self, mut visit: impl FnMut(&[u8])) {
+        for field in self.inspectable_fields() {
+            visit(field);
         }
-        out.extend(self.inspectable_headers.iter().map(Vec::as_slice));
-        out
     }
 
     /// Values of headers in the inspection allow-list — both raw and
@@ -189,6 +195,62 @@ impl Request {
     /// prefixed UA as a UA string and misses trailing SQL).
     pub fn user_agent(&self) -> Option<&str> {
         self.header("user-agent")
+    }
+}
+
+/// Borrowed iterator over the request fields detectors inspect.
+///
+/// Order is stable and matches the old vector-returning API:
+/// path, decoded query values, body bytes when inspected, then raw/decoded
+/// inspectable header values.
+pub struct InspectableFields<'a> {
+    req: &'a Request,
+    phase: InspectablePhase,
+    query_idx: usize,
+    header_idx: usize,
+}
+
+enum InspectablePhase {
+    Path,
+    Query,
+    Body,
+    Headers,
+    Done,
+}
+
+impl<'a> Iterator for InspectableFields<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.phase {
+                InspectablePhase::Path => {
+                    self.phase = InspectablePhase::Query;
+                    return Some(self.req.path.as_bytes());
+                }
+                InspectablePhase::Query => {
+                    if let Some((_, value)) = self.req.query_params.get(self.query_idx) {
+                        self.query_idx += 1;
+                        return Some(value.as_bytes());
+                    }
+                    self.phase = InspectablePhase::Body;
+                }
+                InspectablePhase::Body => {
+                    self.phase = InspectablePhase::Headers;
+                    if self.req.body_inspected {
+                        return Some(self.req.body.as_slice());
+                    }
+                }
+                InspectablePhase::Headers => {
+                    if let Some(value) = self.req.inspectable_headers.get(self.header_idx) {
+                        self.header_idx += 1;
+                        return Some(value.as_slice());
+                    }
+                    self.phase = InspectablePhase::Done;
+                }
+                InspectablePhase::Done => return None,
+            }
+        }
     }
 }
 
@@ -410,7 +472,7 @@ mod tests {
             false,
             ip(),
         );
-        assert!(!v.inspectable_fields().contains(&b"payload".as_slice()));
+        assert!(!v.inspectable_fields().any(|field| field == b"payload"));
         let v2 = Request::build(
             "POST",
             "h",
@@ -421,7 +483,7 @@ mod tests {
             true,
             ip(),
         );
-        assert!(v2.inspectable_fields().contains(&b"payload".as_slice()));
+        assert!(v2.inspectable_fields().any(|field| field == b"payload"));
     }
 
     #[test]
@@ -451,7 +513,7 @@ mod tests {
             ip(),
         )
         .with_truncated_body(true);
-        assert!(v.inspectable_fields().contains(&b"prefix-bytes".as_slice()));
+        assert!(v.inspectable_fields().any(|field| field == b"prefix-bytes"));
         assert!(v.body_truncated);
     }
 
@@ -511,7 +573,7 @@ mod tests {
             false,
             ip(),
         );
-        let fields = v.inspectable_fields();
+        let fields: Vec<&[u8]> = v.inspectable_fields().collect();
         assert!(fields.contains(&b"sess=abc; id=42".as_slice()));
         assert!(fields.contains(&b"https://x.example/from".as_slice()));
         assert!(fields.contains(&b"Bearer tok".as_slice()));
@@ -558,7 +620,7 @@ mod tests {
             ip(),
         );
         assert_eq!(
-            v.inspectable_fields(),
+            v.inspectable_fields().collect::<Vec<_>>(),
             vec![
                 b"/path".as_slice(),
                 b"qv".as_slice(),

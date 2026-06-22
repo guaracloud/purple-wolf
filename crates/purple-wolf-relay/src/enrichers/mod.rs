@@ -40,11 +40,13 @@ pub fn build(cfg: &crate::config::EnricherConfig) -> Arc<dyn Enricher> {
             url,
             timeout_ms,
             cache_ttl_s,
+            cache_capacity,
         } => Arc::new(http::HttpEnricher::new(
             on_label.clone(),
             url.clone(),
             Duration::from_millis(*timeout_ms),
             Duration::from_secs(*cache_ttl_s),
+            *cache_capacity,
         )),
     }
 }

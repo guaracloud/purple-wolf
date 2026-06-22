@@ -86,8 +86,7 @@ impl Detector for SignatureDetector {
         // Header values (User-Agent, Cookie, Referer, X-*, etc.) are already
         // part of `inspectable_fields()` per the allow-list in `request.rs`.
         // Fields are raw bytes (NEW-I2); aho-corasick matches bytes natively.
-        let fields = req.inspectable_fields();
-        for field in fields {
+        for field in req.inspectable_fields() {
             for m in self.matcher.find_iter(field) {
                 let (lit, rule, sev) = SIGNATURES[m.pattern().as_usize()];
                 verdicts.push(Verdict {

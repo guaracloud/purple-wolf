@@ -102,7 +102,8 @@ pub enum EnricherConfig {
     },
     /// HTTP enricher: GET `url` (with `{value}` substituted for the
     /// label value), parse the JSON body as `BTreeMap<String,String>`,
-    /// merge into labels. Cached per (url, value) for `cache_ttl_s`.
+    /// merge into labels. Cached per label value for `cache_ttl_s`, bounded
+    /// by `cache_capacity`.
     Http {
         on_label: String,
         url: String,
@@ -110,6 +111,8 @@ pub enum EnricherConfig {
         timeout_ms: u64,
         #[serde(default = "default_cache_ttl_s")]
         cache_ttl_s: u64,
+        #[serde(default = "default_cache_capacity")]
+        cache_capacity: usize,
     },
 }
 fn default_enricher_timeout_ms() -> u64 {
@@ -117,6 +120,9 @@ fn default_enricher_timeout_ms() -> u64 {
 }
 fn default_cache_ttl_s() -> u64 {
     300
+}
+fn default_cache_capacity() -> usize {
+    1024
 }
 
 // ---------- subscribers ----------
@@ -523,6 +529,32 @@ mod tests {
         .unwrap_err();
         // serde_yaml's tagged-union error mentions the bad variant name.
         assert!(err.to_string().contains("kafka"), "err: {err}");
+    }
+
+    #[test]
+    fn http_enricher_defaults_include_bounded_cache_capacity() {
+        let cfg = load_from_str(
+            r#"
+            sources: [{ type: stdin }]
+            enrichments:
+              - type: http
+                on_label: tenant
+                url: https://catalog.example/tenants/{value}
+            subscribers: []
+            "#,
+        )
+        .unwrap();
+        match &cfg.enrichments[0] {
+            EnricherConfig::Http {
+                cache_ttl_s,
+                cache_capacity,
+                ..
+            } => {
+                assert_eq!(*cache_ttl_s, 300);
+                assert_eq!(*cache_capacity, 1024);
+            }
+            other => panic!("expected http enricher, got {other:?}"),
+        }
     }
 
     #[test]

@@ -37,6 +37,18 @@ subscribers:
     secret_env: EXAMPLE_HMAC_SECRET
 ```
 
+Optional HTTP enrichers can cache successful lookups without unbounded
+memory growth:
+
+```yaml
+enrichments:
+  - type: http
+    on_label: tenant
+    url: https://catalog.example/tenants/{value}/labels
+    cache_ttl_s: 300
+    cache_capacity: 1024
+```
+
 ## Architecture
 
 ```

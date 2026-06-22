@@ -34,7 +34,7 @@ use crate::subscribers::retry::RetrySchedule;
 pub struct SubscriberRuntime {
     pub id: String,
     pub dlq: Arc<Dlq>,
-    pub tx: mpsc::Sender<Envelope>,
+    pub tx: mpsc::Sender<Arc<Envelope>>,
 }
 
 /// Per-task settings, passed into `run_sink` once at task spawn so the
@@ -74,7 +74,7 @@ pub const USER_AGENT: &str = concat!("purple-wolf-relay/", env!("CARGO_PKG_VERSI
 /// Spawn-friendly runner. Returns when `rx` closes or `shutdown` fires.
 pub async fn run_sink(
     cfg: HttpSinkConfig,
-    mut rx: mpsc::Receiver<Envelope>,
+    mut rx: mpsc::Receiver<Arc<Envelope>>,
     mut shutdown: broadcast::Receiver<()>,
 ) {
     let client = reqwest::Client::builder()
@@ -105,7 +105,7 @@ pub async fn run_sink(
 async fn deliver_with_retries(
     cfg: &HttpSinkConfig,
     client: &reqwest::Client,
-    initial_env: Envelope,
+    initial_env: Arc<Envelope>,
 ) {
     let mut env = initial_env;
     let mut attempt: u32 = 1;
@@ -131,7 +131,7 @@ async fn deliver_with_retries(
                     attempt,
                     "permanent failure; sending to DLQ"
                 );
-                cfg.dlq.push(env);
+                cfg.dlq.push(env.as_ref().clone());
                 update_dlq_depth(cfg);
                 return;
             }
@@ -145,7 +145,7 @@ async fn deliver_with_retries(
                         max_attempts = cfg.max_attempts,
                         "max_attempts exhausted; sending to DLQ"
                     );
-                    cfg.dlq.push(env);
+                    cfg.dlq.push(env.as_ref().clone());
                     update_dlq_depth(cfg);
                     return;
                 }
@@ -160,7 +160,7 @@ async fn deliver_with_retries(
                 );
                 tokio::time::sleep(delay).await;
                 attempt += 1;
-                env = env.with_attempt(attempt);
+                env = Arc::new(env.as_ref().clone().with_attempt(attempt));
             }
         }
     }
@@ -344,7 +344,7 @@ mod tests {
         let (_sd_tx, sd_rx) = broadcast::channel::<()>(1);
         let h = tokio::spawn(run_sink(cfg, rx, sd_rx));
 
-        tx.send(env()).await.unwrap();
+        tx.send(Arc::new(env())).await.unwrap();
         drop(tx);
         let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
         assert!(dlq.is_empty());
@@ -373,7 +373,7 @@ mod tests {
         let (_sd_tx, sd_rx) = broadcast::channel::<()>(1);
         let h = tokio::spawn(run_sink(cfg, rx, sd_rx));
 
-        tx.send(env()).await.unwrap();
+        tx.send(Arc::new(env())).await.unwrap();
         drop(tx);
         let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
         assert_eq!(counter.load(Ordering::SeqCst), 3);
@@ -402,7 +402,7 @@ mod tests {
         let (_sd_tx, sd_rx) = broadcast::channel::<()>(1);
         let h = tokio::spawn(run_sink(cfg, rx, sd_rx));
 
-        tx.send(env()).await.unwrap();
+        tx.send(Arc::new(env())).await.unwrap();
         drop(tx);
         let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
         assert_eq!(counter.load(Ordering::SeqCst), 1, "no retries on 4xx");
@@ -428,7 +428,7 @@ mod tests {
         let (_sd_tx, sd_rx) = broadcast::channel::<()>(1);
         let h = tokio::spawn(run_sink(cfg, rx, sd_rx));
 
-        tx.send(env()).await.unwrap();
+        tx.send(Arc::new(env())).await.unwrap();
         drop(tx);
         let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
         assert_eq!(
@@ -488,7 +488,7 @@ mod tests {
         let (_sd_tx, sd_rx) = broadcast::channel::<()>(1);
         let h = tokio::spawn(run_sink(cfg, rx, sd_rx));
 
-        tx.send(env()).await.unwrap();
+        tx.send(Arc::new(env())).await.unwrap();
         drop(tx);
         let _ = tokio::time::timeout(Duration::from_secs(10), h).await;
 
