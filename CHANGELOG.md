@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Move GitHub release uploads to the Node 24-based
+  `softprops/action-gh-release` v3.0.1 runtime.
+
 ## [0.4.4] - 2026-07-10
 
 ### Security
