@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add crates.io keywords/categories for publishable packages and remove an
   unmatched license allowance from `cargo-deny` configuration. Complete the
   Helm chart metadata, make workflow environment-file writes shell-safe, and
-  validate the workflow set with `actionlint`.
+  move checkout jobs from deprecated Node 20 to the Node 24-based
+  `actions/checkout` v7. Validate the workflow set with `actionlint`.
 
 ## [0.4.3] - 2026-07-10
 
