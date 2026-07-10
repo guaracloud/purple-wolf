@@ -1,4 +1,4 @@
-# End-to-end purple-wolf v0.4.2 simulation.
+# End-to-end purple-wolf v0.4.3 simulation.
 #
 # Brings up:
 #   - upstream         - a stub HTTP server (the "real" backend)
@@ -24,7 +24,7 @@ services:
     command: ["python", "-m", "http.server", "8000"]
 
   traefik:
-    image: traefik:v3
+    image: traefik:v3.7.7
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     ports:
@@ -47,7 +47,7 @@ services:
       - RECORD_PATH=/dev/stdout
 
   relay:
-    image: ghcr.io/guaracloud/purple-wolf-relay:0.4.2
+    image: ghcr.io/guaracloud/purple-wolf-relay:0.4.3
     command:
       - --config=/etc/purple-wolf-relay/relay.yaml
       - --admin-addr=0.0.0.0:9090

@@ -16,13 +16,13 @@ services:
     environment:
       - PURPLEWOLF_SECRET=integration-test-secret
       - RECORD_PATH=/shared/requests.jsonl
-    ports: ["8090:8090"]
+    ports: ["${PURPLE_WOLF_SUBSCRIBER_PORT:-8090}:8090"]
 
   traefik:
-    image: traefik:v3
+    image: traefik:v3.7.7
     command:
       - "--configFile=/etc/traefik/traefik.yml"
-    ports: ["8080:8080"]
+    ports: ["${PURPLE_WOLF_TRAEFIK_PORT:-8080}:8080"]
     volumes:
       - ./traefik:/etc/traefik:ro
       - ./plugin/.traefik.yml:/plugins-local/src/github.com/guaracloud/purple-wolf/.traefik.yml:ro
@@ -32,17 +32,16 @@ services:
       - upstream
 
   relay:
-    # The relay is built from source by docker-compose via the
-    # Dockerfile that lands in Phase I Task 29; for now we mount the
-    # already-built debug binary.
-    image: rust:1.85-slim
-    working_dir: /workspace
+    image: purple-wolf-relay:integration
+    build:
+      context: ../..
+      dockerfile: crates/purple-wolf-relay/Dockerfile
     command:
-      - "sh"
-      - "-c"
-      - "/workspace/target/debug/purple-wolf-relay --config /etc/relay/relay.yaml --admin-addr 0.0.0.0:9090"
+      - "--config"
+      - "/etc/relay/relay.yaml"
+      - "--admin-addr"
+      - "0.0.0.0:9090"
     volumes:
-      - ../..:/workspace:ro
       - ./relay:/etc/relay:ro
       - ./shared:/shared
     environment:
@@ -51,4 +50,4 @@ services:
     depends_on:
       - subscriber
       - traefik
-    ports: ["9090:9090"]
+    ports: ["${PURPLE_WOLF_RELAY_ADMIN_PORT:-9090}:9090"]

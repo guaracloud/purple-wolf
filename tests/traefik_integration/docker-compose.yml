@@ -5,7 +5,7 @@ services:
     volumes:
       - ./upstream.py:/app/upstream.py:ro
   traefik:
-    image: traefik:v3
+    image: traefik:v3.7.7
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     ports: ["${PURPLE_WOLF_TRAEFIK_PORT:-8080}:8080"]

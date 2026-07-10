@@ -1,6 +1,6 @@
 # Homelab one-shot test deployment
 
-A real-world end-to-end smoke test of purple-wolf v0.4.2 (WAF + relay)
+A real-world end-to-end smoke test of purple-wolf v0.4.3 (WAF + relay)
 on a Kubernetes cluster. Drives live HTTP traffic through Traefik
 with the wasm plugin loaded, watches the relay deliver
 HMAC-signed webhooks to a recording subscriber, and reads back the
@@ -34,7 +34,7 @@ networking with a shared `emptyDir` at `/shared`.
 ```text
 ┌─ Pod (purple-wolf-test/pw-test) ────────────────────────────────┐
 │ initContainer: stage-plugin                                     │
-│   pulls ghcr.io/guaracloud/purple-wolf-wasm:0.4.2, copies the   │
+│   pulls ghcr.io/guaracloud/purple-wolf-wasm:0.4.3, copies the   │
 │   .wasm + Traefik plugin manifest into an emptyDir mounted at   │
 │   /plugins-local/src/github.com/guaracloud/purple-wolf/         │
 ├─────────────────────────────────────────────────────────────────┤
@@ -63,8 +63,8 @@ rolling pods.
   - DNS that maps a `*.home` (or whatever you change it to) hostname
     to the ingress LB.
 - The two GHCR images, public-accessible from the cluster's nodes:
-  - `ghcr.io/guaracloud/purple-wolf-relay:0.4.2`
-  - `ghcr.io/guaracloud/purple-wolf-wasm:0.4.2`
+  - `ghcr.io/guaracloud/purple-wolf-relay:0.4.3`
+  - `ghcr.io/guaracloud/purple-wolf-wasm:0.4.3`
 - `kubectl` configured for the right context. **Double-check** -
   this manifest is for a sandbox cluster, not production.
 

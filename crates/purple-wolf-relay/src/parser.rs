@@ -13,6 +13,7 @@
 //! `key=value` pairs in the surrounding log text. They're best-effort:
 //! found and surfaced when present, ignored otherwise.
 
+use std::borrow::Cow;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -44,6 +45,13 @@ pub struct ParsedAudit {
 /// Attempt to parse one Traefik log line.
 pub fn parse_line(bytes: &[u8]) -> Result<ParsedAudit, ParseError> {
     let text = std::str::from_utf8(bytes).map_err(|_| ParseError::NotPurpleWolf)?;
+
+    // Source tasks feed every Traefik log line through this parser. ANSI
+    // escapes cannot encode a JSON opening brace, so reject the overwhelmingly
+    // common non-JSON line before allocating or scanning escape sequences.
+    if !text.as_bytes().contains(&b'{') {
+        return Err(ParseError::NotPurpleWolf);
+    }
     let stripped = strip_ansi(text);
 
     let Some((start, end)) = find_json_object(&stripped) else {
@@ -117,11 +125,14 @@ fn find_json_object(s: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Remove ANSI escape sequences (CSI: `\x1b[...m` and similar) so we
-/// can do simple string searches against the log line. Cheap enough
-/// to run unconditionally; the parser is hit once per audit line, not
-/// per byte of body.
-fn strip_ansi(s: &str) -> String {
+/// Remove ANSI escape sequences (CSI: `\x1b[...m` and similar) so we can do
+/// simple string searches against the log line. Plain production log lines
+/// are borrowed unchanged; only a line that actually contains ESC allocates.
+fn strip_ansi(s: &str) -> Cow<'_, str> {
+    if !s.as_bytes().contains(&b'\x1b') {
+        return Cow::Borrowed(s);
+    }
+
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -140,7 +151,7 @@ fn strip_ansi(s: &str) -> String {
         }
         out.push(c);
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Extract `middlewareName=...`, `routerName=...`, `entryPointName=...`
@@ -193,6 +204,20 @@ mod tests {
     fn rejects_non_purple_wolf_line() {
         let line = b"INF Traefik startup complete";
         assert!(matches!(parse_line(line), Err(ParseError::NotPurpleWolf)));
+    }
+
+    #[test]
+    fn ansi_normalization_borrows_plain_lines() {
+        let line = r#"{"action":"allow","would_block_rules":[]}"#;
+        assert!(matches!(strip_ansi(line), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn ansi_normalization_owns_only_when_escape_sequences_are_present() {
+        let line = "\x1b[32mgreen\x1b[0m";
+        let stripped = strip_ansi(line);
+        assert!(matches!(stripped, Cow::Owned(_)));
+        assert_eq!(stripped, "green");
     }
 
     #[test]

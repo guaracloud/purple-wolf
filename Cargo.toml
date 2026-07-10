@@ -8,7 +8,7 @@ members = [
 exclude = ["fuzz", "tests/relay_integration", "tests/traefik_integration"]
 
 [workspace.package]
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 # v0.3 bumps MSRV from 1.75 to 1.88. The relay's dep tree pulls in
 # icu_* / idna (via reqwest's URL stack) which require 1.86, and
@@ -29,7 +29,7 @@ percent-encoding = "2"
 # Workspace-level path+version pin for the core crate. Member
 # manifests reference this via `purple-wolf-core.workspace = true`,
 # so a `cargo release` bump propagates atomically.
-purple-wolf-core = { path = "crates/purple-wolf-core", version = "0.4.2" }
+purple-wolf-core = { path = "crates/purple-wolf-core", version = "0.4.3" }
 
 # Size-optimised release for the WASM plugin artifact.
 [profile.release]
@@ -48,3 +48,21 @@ strip = true
 # remaining panic path. The `catch_unwind` in the shim is retained only as a
 # belt-and-braces guard for native (non-wasm) embeddings, where unwinding
 # does work. See THREAT_MODEL.md §4.3.
+
+# Keep the workspace's compact release profile, but compile the request-path
+# engine and its multi-pattern matcher for speed. Criterion measured a
+# 17-23% improvement across representative inspect cases; the profile-only
+# WASM experiment grew by 3.1% (554,544 -> 571,614 bytes).
+[profile.release.package.purple-wolf-core]
+opt-level = 3
+
+[profile.release.package.aho-corasick]
+opt-level = 3
+
+# `cargo bench` should exercise the same package-level optimization choices as
+# the shipped guest instead of silently benchmarking the all-`z` variant.
+[profile.bench.package.purple-wolf-core]
+opt-level = 3
+
+[profile.bench.package.aho-corasick]
+opt-level = 3

@@ -6,6 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-10
+
+### Security
+
+- Pin active demo, integration, and homelab Traefik images to v3.7.7, outside
+  the affected range of the 2025 WASM plugin archive path-traversal advisory.
+  Historical benchmark manifests remain on v3.1 so published results stay
+  reproducible.
+
+### Performance
+
+- Compile the request-path core and Aho-Corasick matcher at `opt-level = 3`
+  while retaining size optimization for the rest of the workspace. Controlled
+  Criterion runs improved representative inspection cases by 17-23% for a
+  3.1% WASM size increase.
+- Keep common http-wasm ABI scratch buffers on the stack, reuse valid UTF-8
+  host buffers as `String`s, and join duplicate headers without intermediate
+  strings.
+- Add relay parser benchmarks and avoid allocating ANSI-normalized copies for
+  plain log lines; brace-free non-audit lines now reject before normalization.
+
+### Reliability
+
+- Clamp `body.maxInspectBytes` to the host's existing 16 MiB guest allocation
+  ceiling with an operator-visible warning instead of silently inspecting less
+  than the parsed configuration advertises.
+- Make the full relay integration harness portable across Linux and macOS by
+  building the production distroless image, accepting a prebuilt WASM, and
+  allowing host ports to be overridden without disrupting unrelated services.
+
 ## [0.4.2] - 2026-07-09
 
 ### Security

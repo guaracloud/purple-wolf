@@ -288,6 +288,7 @@ fn default_group(enabled: bool, mode: core::GroupMode) -> core::GroupConfig {
 /// safety config in that case.
 pub fn parse(bytes: &[u8]) -> Result<(core::Config, Vec<String>), String> {
     let w: Wire = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let mut warnings: Vec<String> = Vec::new();
     // NEW-M7: range validation. Pre-fix the adapter silently coerced
     // `perSecond: 0` to 1 rps (most restrictive — looked like "disable"
     // but was actually "rate-limit to 1 req/s") and `maxInspectBytes: 0`
@@ -305,6 +306,17 @@ pub fn parse(bytes: &[u8]) -> Result<(core::Config, Vec<String>), String> {
                 .to_string(),
         );
     }
+    let max_inspect_bytes = if w.body.max_inspect_bytes > crate::host::MAX_ALLOC {
+        warnings.push(format!(
+            "body.maxInspectBytes={} exceeds the guest allocation ceiling {}; clamping to {} bytes",
+            w.body.max_inspect_bytes,
+            crate::host::MAX_ALLOC,
+            crate::host::MAX_ALLOC
+        ));
+        crate::host::MAX_ALLOC
+    } else {
+        w.body.max_inspect_bytes
+    };
     // Drop reserved-prefix label keys before validation: operators must
     // not be able to spoof `purple_wolf.middleware` / `purple_wolf.router`
     // etc., which are reserved for fields the WAF or downstream relay
@@ -312,7 +324,6 @@ pub fn parse(bytes: &[u8]) -> Result<(core::Config, Vec<String>), String> {
     // a reserved key doesn't lose their whole config; instead each drop
     // surfaces as a warning the FFI layer can emit.
     let mut labels = w.labels;
-    let mut warnings: Vec<String> = Vec::new();
     let reserved: Vec<String> = labels
         .keys()
         .filter(|k| k.starts_with("purple_wolf."))
@@ -329,7 +340,7 @@ pub fn parse(bytes: &[u8]) -> Result<(core::Config, Vec<String>), String> {
         mode: w.mode,
         fail_mode: w.fail_mode.into(),
         body: core::BodyConfig {
-            max_inspect_bytes: w.body.max_inspect_bytes,
+            max_inspect_bytes,
             over_cap: w.body.over_cap,
         },
         groups: w.groups.into(),
@@ -538,6 +549,20 @@ mod tests {
         }"#;
         let err = parse(json).expect_err("maxInspectBytes=0 must error");
         assert!(err.contains("maxInspectBytes"), "error: {err}");
+    }
+
+    #[test]
+    fn clamps_body_limit_to_the_host_allocation_ceiling_with_warning() {
+        let json = format!(
+            r#"{{"mode":"monitor","body":{{"maxInspectBytes":{}}}}}"#,
+            crate::host::MAX_ALLOC + 1
+        );
+        let (cfg, warnings) = parse(json.as_bytes()).expect("oversize limit is clamped");
+        assert_eq!(cfg.body.max_inspect_bytes, crate::host::MAX_ALLOC);
+        assert!(
+            warnings.iter().any(|warning| warning.contains("clamping")),
+            "warnings: {warnings:?}"
+        );
     }
 
     /// Traefik serializes YAML booleans/integers to JSON STRINGS when

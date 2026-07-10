@@ -26,8 +26,7 @@ const FEATURE_BUFFER_REQUEST: i32 = 1;
 
 /// Largest aggregate host value or inspected body prefix we'll allocate in the
 /// guest (16 MiB). Anything past this is intentionally truncated or rejected.
-#[cfg(any(target_arch = "wasm32", test))]
-const MAX_ALLOC: usize = 0xFF_FFFF;
+pub(crate) const MAX_ALLOC: usize = 0xFF_FFFF;
 
 /// Starting size for the scratch buffer used by `read_buf` retry logic. Most
 /// header/method/URI reads fit comfortably in this with one host call.
@@ -97,16 +96,7 @@ pub fn get_request_header_names() -> Vec<String> {
 /// an attacker could otherwise hide a payload in the second of two
 /// duplicate headers (NEW-I3 in the followup review).
 pub fn get_request_header(name: &str) -> Option<String> {
-    let values = header_values(KIND_REQUEST, name.as_bytes());
-    if values.is_empty() {
-        return None;
-    }
-    let joined = values
-        .into_iter()
-        .map(bytes_to_string_lossy)
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(joined)
+    join_header_values(header_values(KIND_REQUEST, name.as_bytes()))
 }
 
 /// Read at most `max` bytes of the request body into guest memory and return
@@ -164,17 +154,16 @@ enum LogLevel {
 // Variable-length read helpers (wasm-only; native fallbacks bypass them).
 // ---------------------------------------------------------------------------
 
-#[cfg(target_arch = "wasm32")]
-fn read_buf(mut call: impl FnMut(*mut u8, i32) -> i32) -> Vec<u8> {
-    let mut buf = vec![0u8; SCRATCH];
-    // SAFETY: `buf` is a valid, exclusive, properly-sized writable slice of
-    // length `buf.len()`; the host writes at most `buf_limit` bytes and
-    // returns the true length the request would have needed.
-    let needed = call(buf.as_mut_ptr(), buf.len() as i32);
+#[cfg(any(target_arch = "wasm32", test))]
+fn read_buf(mut call: impl FnMut(&mut [u8]) -> i32) -> Vec<u8> {
+    // Keep the speculative 2 KiB ABI buffer on the stack. Scalar values are
+    // normally tiny; returning an exact-sized Vec avoids both the old heap
+    // scratch allocation and retaining 2 KiB of capacity in the final String.
+    let mut scratch = [0u8; SCRATCH];
+    let needed = call(&mut scratch);
     let needed = needed.max(0) as usize;
-    if needed <= buf.len() {
-        buf.truncate(needed);
-        return buf;
+    if needed <= scratch.len() {
+        return scratch[..needed].to_vec();
     }
     // NEW-H5 guard: if the host asks for more than our hard cap, a second
     // call with `buf_limit < needed` would (per http-wasm spec) cause the
@@ -194,9 +183,7 @@ fn read_buf(mut call: impl FnMut(*mut u8, i32) -> i32) -> Vec<u8> {
     }
     let cap = needed;
     let mut big = vec![0u8; cap];
-    // SAFETY: same invariants as the first call; buffer is sized to the host's
-    // requested length (no longer clamped, since needed <= MAX_ALLOC).
-    let actual = call(big.as_mut_ptr(), big.len() as i32);
+    let actual = call(&mut big);
     let actual = actual.max(0) as usize;
     // Defense in depth: if a misbehaving host still reports more than the
     // buffer we just gave it, refuse to forward the contents rather than
@@ -214,14 +201,16 @@ fn read_buf(mut call: impl FnMut(*mut u8, i32) -> i32) -> Vec<u8> {
 
 /// Read a NUL-delimited multi-value buffer. The host return value packs
 /// `count` in the high 32 bits and `byte_len` in the low 32.
-#[cfg(target_arch = "wasm32")]
-fn read_buf_multi(mut call: impl FnMut(*mut u8, i32) -> i64) -> Vec<Vec<u8>> {
-    let mut buf = vec![0u8; SCRATCH];
-    // SAFETY: see `read_buf`.
-    let packed = call(buf.as_mut_ptr(), buf.len() as i32);
+#[cfg(any(target_arch = "wasm32", test))]
+fn read_buf_multi(mut call: impl FnMut(&mut [u8]) -> i64) -> Vec<Vec<u8>> {
+    // Header aggregates get the same stack fast path. `split_nul` already
+    // copies each returned value into its owned final buffer, so a heap-backed
+    // aggregate scratch buffer only added an allocation with no retained data.
+    let mut scratch = [0u8; SCRATCH];
+    let packed = call(&mut scratch);
     let (count, byte_len) = split_packed(packed);
-    if byte_len <= buf.len() {
-        return split_nul(&buf[..byte_len], count);
+    if byte_len <= scratch.len() {
+        return split_nul(&scratch[..byte_len], count);
     }
     // As with `read_buf`, retrying below the host-reported length writes
     // nothing by ABI contract. Treat an oversized aggregate as unavailable
@@ -238,8 +227,7 @@ fn read_buf_multi(mut call: impl FnMut(*mut u8, i32) -> i64) -> Vec<Vec<u8>> {
     }
     let cap = byte_len;
     let mut big = vec![0u8; cap];
-    // SAFETY: see `read_buf`.
-    let packed = call(big.as_mut_ptr(), big.len() as i32);
+    let packed = call(&mut big);
     let (count, byte_len) = split_packed(packed);
     if byte_len > cap {
         log_bytes(
@@ -251,7 +239,7 @@ fn read_buf_multi(mut call: impl FnMut(*mut u8, i32) -> i64) -> Vec<Vec<u8>> {
     split_nul(&big[..byte_len], count)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn split_packed(n: i64) -> (usize, usize) {
     let count = (n >> 32) as i32;
     let len = n as i32;
@@ -286,9 +274,26 @@ fn split_eof(n: i64) -> (bool, usize) {
 }
 
 fn bytes_to_string_lossy(b: Vec<u8>) -> String {
-    // Avoid `from_utf8(...).unwrap()` — Traefik can forward non-UTF8 in odd
-    // edge cases and we never want a guest panic from a malformed header.
-    String::from_utf8_lossy(&b).into_owned()
+    // The valid UTF-8 path transfers the Vec allocation directly into String
+    // without copying. Traefik can still forward non-UTF8 in odd edge cases;
+    // those take the same safe replacement-character fallback as before.
+    match String::from_utf8(b) {
+        Ok(s) => s,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    }
+}
+
+/// Join repeated header values per RFC 7230 §3.2.2 without first allocating a
+/// Vec<String> and then copying it all into a second joined String. A single
+/// value—the common case—reuses the host value's allocation directly.
+fn join_header_values(values: Vec<Vec<u8>>) -> Option<String> {
+    let mut values = values.into_iter();
+    let mut joined = values.next()?;
+    for value in values {
+        joined.extend_from_slice(b", ");
+        joined.extend_from_slice(&value);
+    }
+    Some(bytes_to_string_lossy(joined))
 }
 
 // ---------------------------------------------------------------------------
@@ -300,25 +305,25 @@ fn method_bytes() -> Vec<u8> {
     // SAFETY: `get_method` is the http-wasm import obeying the
     // `(buf, buf_limit) -> needed` contract; `read_buf` only forwards a valid
     // exclusive buffer of `buf_limit` bytes.
-    read_buf(|p, l| unsafe { abi::get_method(p, l) })
+    read_buf(|buf| unsafe { abi::get_method(buf.as_mut_ptr(), buf.len() as i32) })
 }
 
 #[cfg(target_arch = "wasm32")]
 fn uri_bytes() -> Vec<u8> {
     // SAFETY: same as `method_bytes`.
-    read_buf(|p, l| unsafe { abi::get_uri(p, l) })
+    read_buf(|buf| unsafe { abi::get_uri(buf.as_mut_ptr(), buf.len() as i32) })
 }
 
 #[cfg(target_arch = "wasm32")]
 fn source_addr_bytes() -> Vec<u8> {
     // SAFETY: same as `method_bytes`.
-    read_buf(|p, l| unsafe { abi::get_source_addr(p, l) })
+    read_buf(|buf| unsafe { abi::get_source_addr(buf.as_mut_ptr(), buf.len() as i32) })
 }
 
 #[cfg(target_arch = "wasm32")]
 fn config_bytes() -> Vec<u8> {
     // SAFETY: same as `method_bytes`.
-    read_buf(|p, l| unsafe { abi::get_config(p, l) })
+    read_buf(|buf| unsafe { abi::get_config(buf.as_mut_ptr(), buf.len() as i32) })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -326,7 +331,7 @@ fn header_names(kind: i32) -> Vec<Vec<u8>> {
     // SAFETY: `get_header_names` is the http-wasm multi-value import. The
     // returned i64 packs (count, byte_len) and the buffer holds NUL-delimited
     // names — `read_buf_multi` handles both invariants.
-    read_buf_multi(|p, l| unsafe { abi::get_header_names(kind, p, l) })
+    read_buf_multi(|buf| unsafe { abi::get_header_names(kind, buf.as_mut_ptr(), buf.len() as i32) })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -335,7 +340,9 @@ fn header_values(kind: i32, name: &[u8]) -> Vec<Vec<u8>> {
     let name_len = name.len() as i32;
     // SAFETY: see `header_names`; the host also reads `(name_ptr, name_len)`
     // which is a valid borrow for the duration of the call.
-    read_buf_multi(|p, l| unsafe { abi::get_header_values(kind, name_ptr, name_len, p, l) })
+    read_buf_multi(|buf| unsafe {
+        abi::get_header_values(kind, name_ptr, name_len, buf.as_mut_ptr(), buf.len() as i32)
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -561,7 +568,10 @@ impl BodyReadError {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::{drain_body, split_nul, BodyRead, BodyReadError, MAX_MULTI_VALUES};
+    use super::{
+        bytes_to_string_lossy, drain_body, join_header_values, read_buf, read_buf_multi, split_nul,
+        BodyRead, BodyReadError, MAX_MULTI_VALUES, SCRATCH,
+    };
     use std::collections::VecDeque;
 
     fn reader(
@@ -580,6 +590,66 @@ mod tests {
         let body = drain_body(1024, true, reader([(true, b"".as_slice())]), |_| {}).unwrap();
         assert_eq!(body, BodyRead::default());
         assert_eq!(body.bytes.capacity(), 0);
+    }
+
+    #[test]
+    fn scalar_read_uses_one_call_for_common_values() {
+        let expected = b"GET";
+        let mut calls = 0;
+        let value = read_buf(|buf| {
+            calls += 1;
+            buf[..expected.len()].copy_from_slice(expected);
+            expected.len() as i32
+        });
+        assert_eq!(value, expected);
+        assert_eq!(calls, 1);
+        assert!(value.capacity() < SCRATCH);
+    }
+
+    #[test]
+    fn scalar_read_retries_at_the_exact_reported_size() {
+        let expected = vec![b'x'; SCRATCH + 17];
+        let mut calls = 0;
+        let value = read_buf(|buf| {
+            calls += 1;
+            if buf.len() >= expected.len() {
+                buf[..expected.len()].copy_from_slice(&expected);
+            }
+            expected.len() as i32
+        });
+        assert_eq!(value, expected);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn multi_read_uses_stack_fast_path_and_preserves_values() {
+        let encoded = b"cookie\0user-agent\0";
+        let values = read_buf_multi(|buf| {
+            buf[..encoded.len()].copy_from_slice(encoded);
+            ((2_i64) << 32) | encoded.len() as i64
+        });
+        assert_eq!(values, [b"cookie".to_vec(), b"user-agent".to_vec()]);
+    }
+
+    #[test]
+    fn valid_utf8_conversion_reuses_the_vec_allocation() {
+        let bytes = b"user-agent".to_vec();
+        let ptr = bytes.as_ptr();
+        let text = bytes_to_string_lossy(bytes);
+        assert_eq!(text, "user-agent");
+        assert_eq!(text.as_ptr(), ptr);
+    }
+
+    #[test]
+    fn invalid_utf8_conversion_remains_lossy_and_total() {
+        assert_eq!(bytes_to_string_lossy(vec![b'a', 0xff, b'b']), "a�b");
+    }
+
+    #[test]
+    fn repeated_header_values_keep_wire_order_and_separator() {
+        let joined = join_header_values(vec![b"one".to_vec(), b"two".to_vec()]);
+        assert_eq!(joined.as_deref(), Some("one, two"));
+        assert_eq!(join_header_values(Vec::new()), None);
     }
 
     #[test]

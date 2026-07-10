@@ -4,10 +4,18 @@
 //! `cargo test --manifest-path tests/relay_integration/Cargo.toml -- --ignored`
 //! or via the relay-integration CI job.
 
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
 fn build_wasm() {
+    if let Some(prebuilt) = std::env::var_os("PURPLE_WOLF_PREBUILT_WASM") {
+        let destination = Path::new("../../target/wasm32-wasip1/release/purple_wolf_traefik.wasm");
+        std::fs::create_dir_all(destination.parent().expect("destination has parent"))
+            .expect("create wasm output directory");
+        std::fs::copy(prebuilt, destination).expect("copy prebuilt wasm");
+        return;
+    }
     let status = Command::new("cargo")
         .args([
             "build",
@@ -21,18 +29,6 @@ fn build_wasm() {
         .status()
         .expect("cargo build wasm");
     assert!(status.success(), "wasm build failed");
-}
-
-fn build_relay() {
-    // The docker-compose relay service runs the debug binary out of
-    // the host's target/ directory; build it before bringing the stack
-    // up so the bind-mount has something to execute.
-    let status = Command::new("cargo")
-        .args(["build", "-p", "purple-wolf-relay"])
-        .current_dir("../..")
-        .status()
-        .expect("cargo build relay");
-    assert!(status.success(), "relay build failed");
 }
 
 fn compose_up() {
@@ -54,7 +50,7 @@ fn compose_up() {
         .current_dir(".")
         .status();
     let status = Command::new("docker")
-        .args(["compose", "up", "-d"])
+        .args(["compose", "up", "--build", "-d"])
         .current_dir(".")
         .status()
         .expect("docker compose up");
@@ -78,14 +74,17 @@ impl Drop for Stack {
 }
 
 fn drive_sqli() {
-    let _ = ureq::get("http://127.0.0.1:8080/e/?id=1%27%20OR%20%271%27%3D%271").call();
+    let port = std::env::var("PURPLE_WOLF_TRAEFIK_PORT").unwrap_or_else(|_| "8080".into());
+    let _ = ureq::get(&format!(
+        "http://127.0.0.1:{port}/e/?id=1%27%20OR%20%271%27%3D%271"
+    ))
+    .call();
 }
 
 #[test]
 #[ignore = "requires docker on PATH; run with --ignored or via the relay-integration CI matrix"]
 fn full_stack_delivers_envelope_with_labels_to_subscriber() {
     build_wasm();
-    build_relay();
     let _s = Stack;
     compose_up();
 

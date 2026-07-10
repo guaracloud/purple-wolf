@@ -1,4 +1,4 @@
-# purple-wolf v0.4.2 homelab one-shot test stack.
+# purple-wolf v0.4.3 homelab one-shot test stack.
 #
 # Apply with:
 #   kubectl apply -f examples/relay/k8s/homelab-test.yaml
@@ -17,7 +17,7 @@
 #
 #   ┌─ Pod ──────────────────────────────────────────────────────┐
 #   │ initContainer: stage-plugin                                │
-#   │   pulls ghcr.io/guaracloud/purple-wolf-wasm:0.4.2, copies  │
+#   │   pulls ghcr.io/guaracloud/purple-wolf-wasm:0.4.3, copies  │
 #   │   the .wasm + Traefik plugin manifest into a shared empty- │
 #   │   Dir at /plugins-local/src/.../purple-wolf/               │
 #   ├────────────────────────────────────────────────────────────┤
@@ -257,7 +257,7 @@ spec:
         - name: ghcr-pull
       initContainers:
         - name: stage-plugin
-          image: ghcr.io/guaracloud/purple-wolf-wasm:0.4.2
+          image: ghcr.io/guaracloud/purple-wolf-wasm:0.4.3
           imagePullPolicy: Always
           # The wasm image is busybox-based (see crates/purple-wolf-
           # traefik/Dockerfile.wasm) so `cp` is available.
@@ -287,7 +287,7 @@ spec:
             limits: { memory: 64Mi }
 
         - name: traefik
-          image: docker.io/traefik:v3.1
+          image: docker.io/traefik:v3.7.7
           args:
             - "--configFile=/etc/traefik/traefik.yml"
           ports:
@@ -312,7 +312,7 @@ spec:
             limits: { memory: 256Mi }
 
         - name: relay
-          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.2
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.3
           imagePullPolicy: Always
           args:
             - "--config=/etc/relay/relay.yaml"

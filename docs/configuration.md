@@ -4,7 +4,7 @@
 |---|---|---|---|
 | `mode` | `enforce` \| `monitor` | (required) | Global switch. `monitor` never blocks regardless of group modes. |
 | `failMode` | `failOpen` \| `failClosed` | `failOpen` | On a recoverable failure before the request body is modified: continue (`failOpen`) or 403 (`failClosed`). A mid-stream body reconstruction failure always blocks to avoid forwarding corrupt bytes. |
-| `body.maxInspectBytes` | int | `1048576` | Max bytes of request body inspected. |
+| `body.maxInspectBytes` | int | `1048576` | Max bytes of request body inspected; values above the guest's 16 MiB allocation ceiling are clamped with a startup warning. |
 | `body.overCap` | `pass` \| `block` | `pass` | When body exceeds cap: `pass` inspects the prefix, drains/restores the full body, then forwards; `block` returns 403 as soon as overflow is proven. Pass mode bounds guest memory but incurs host buffering and full-body latency. |
 | `groups.injection` | `{ enabled, mode }` | `{true, enforce}` | SQLi + XSS via libinjection. |
 | `groups.signatures` | `{ enabled, mode }` | `{true, enforce}` | Known-bad literal scanner (path traversal, LFI incl. `/etc/shadow` `/proc/self/environ` `/WEB-INF/`, shell-command injection `;wget`/`;curl`/`\|bash`, `${jndi:` Log4Shell, `php://`/`phar://`/`expect://` wrappers, `xp_cmdshell`, scanner UAs). |

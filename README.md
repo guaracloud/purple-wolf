@@ -2,15 +2,15 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.4.2 released. The current release includes audit labels,
+**Status:** v0.4.3 released. The current release includes audit labels,
 webhook relay delivery, signed artifacts, SBOMs, Helm OCI packaging,
 Kustomize overlays, an O(1) reputation limiter, bounded
 percent-decode-to-fixpoint normalization, an expanded signature pack,
 User-Agent SQLi suffix probing, over-cap body-prefix inspection, an offline
 config validator, relay SSRF hardening, optional relay admin auth, and new
-fuzz targets. v0.4.2 fixes fixed-length and chunked request-body preservation,
-reduces request-normalization and pooled-guest allocation costs, and hardens
-host-controlled ABI reads. See
+fuzz targets. v0.4.3 selectively optimizes the WAF engine and matcher, removes
+common http-wasm and relay-parser allocations, clamps impossible body limits,
+pins active Traefik deployments, and hardens cross-platform integration tests. See
 [CHANGELOG.md](CHANGELOG.md) for the full list,
 [THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed
 to catch, and [docs/configuration.md](docs/configuration.md) for the
@@ -76,7 +76,7 @@ Install the OCI Helm chart in monitor mode:
 
 ```bash
 helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
-  --version 0.4.2 \
+  --version 0.4.3 \
   -f charts/purple-wolf/values.monitor.yaml
 ```
 
@@ -96,7 +96,7 @@ Before production use, verify checksums, Cosign signatures, SBOMs, image
 digests, and the release manifest:
 
 ```bash
-gh release download v0.4.2 --repo guaracloud/purple-wolf --dir purple-wolf-release
+gh release download v0.4.3 --repo guaracloud/purple-wolf --dir purple-wolf-release
 ```
 
 Follow [`docs/release-verification.md`](docs/release-verification.md) and deploy

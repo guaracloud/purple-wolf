@@ -129,7 +129,7 @@ spec:
               subPath: upstream.py
               readOnly: true
         - name: traefik
-          image: docker.io/traefik:v3.1
+          image: docker.io/traefik:v3.7.7
           args: ["--configFile=/etc/traefik/traefik.yml"]
           ports:
             - { name: web, containerPort: 8080 }

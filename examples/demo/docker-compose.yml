@@ -17,7 +17,7 @@ services:
     command: ["python", "-m", "http.server", "8000"]
 
   traefik:
-    image: traefik:v3
+    image: traefik:v3.7.7
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     ports:
