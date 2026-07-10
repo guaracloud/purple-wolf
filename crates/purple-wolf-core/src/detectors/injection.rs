@@ -42,7 +42,7 @@ impl Detector for InjectionDetector {
         // dedupes: a UA whose whole value already flagged is not re-counted.
         if !sqli_found {
             if let Some(ua) = req.user_agent() {
-                for cand in ua_suffix_candidates(ua) {
+                for cand in ua_suffix_candidates(ua).into_iter().flatten() {
                     if ffi::is_sqli(cand.as_bytes()) {
                         verdicts.push(Verdict {
                             group: Group::Injection,
@@ -62,28 +62,28 @@ impl Detector for InjectionDetector {
     }
 }
 
-/// Candidate suffixes of a User-Agent value to re-probe for SQLi, longest
-/// first. Returns only substrings that differ from the whole value (the
-/// whole value was already probed in the main loop). A browser UA looks
+/// Candidate suffixes of a User-Agent value to re-probe for SQLi, with the
+/// narrowest browser-tail candidate first. Returns only substrings that differ
+/// from the whole value (the whole value was already probed in the main loop).
+/// A browser UA looks
 /// like `Mozilla/5.0 (platform) Engine/ver`, so the SQL an attacker appends
 /// lives after the first space or after the parenthesized platform block.
-fn ua_suffix_candidates(ua: &str) -> Vec<&str> {
-    let mut out: Vec<&str> = Vec::new();
+fn ua_suffix_candidates(ua: &str) -> [Option<&str>; 2] {
     // After the last ')': covers `…(X11; Linux) <sql>`.
-    if let Some(idx) = ua.rfind(')') {
+    let after_paren = ua.rfind(')').and_then(|idx| {
         let tail = ua[idx + 1..].trim();
-        if !tail.is_empty() && tail.len() < ua.len() {
-            out.push(tail);
-        }
-    }
+        (!tail.is_empty() && tail.len() < ua.len()).then_some(tail)
+    });
+
     // After the first ASCII space: covers `Mozilla/5.0 <sql>` (no parens).
-    if let Some(idx) = ua.find(' ') {
+    let after_space = ua.find(' ').and_then(|idx| {
         let tail = ua[idx + 1..].trim();
-        if !tail.is_empty() && tail.len() < ua.len() && !out.contains(&tail) {
-            out.push(tail);
-        }
-    }
-    out
+        (!tail.is_empty() && tail.len() < ua.len() && Some(tail) != after_paren).then_some(tail)
+    });
+
+    // The fixed-size representation keeps the benign browser path off the
+    // allocator while retaining the original candidate order and dedupe rules.
+    [after_paren, after_space]
 }
 
 /// Build a short, log-safe representation of an attacker-controlled byte
@@ -311,16 +311,21 @@ mod tests {
         // After the first space.
         assert_eq!(
             super::ua_suffix_candidates("Mozilla/5.0 1 OR 1=1"),
-            vec!["1 OR 1=1"]
+            [None, Some("1 OR 1=1")]
         );
-        // After the last ')' (preferred, longest-first) and after first space.
+        // After the last ')' (preferred, narrowest first) and after first space.
         assert_eq!(
             super::ua_suffix_candidates("Mozilla/5.0 (X11; Linux) ' OR 1=1"),
-            vec!["' OR 1=1", "(X11; Linux) ' OR 1=1"]
+            [Some("' OR 1=1"), Some("(X11; Linux) ' OR 1=1")]
         );
         // A single token (no space, no paren) yields no suffix candidate —
         // it was already probed whole in the main loop.
-        assert!(super::ua_suffix_candidates("curl/8.4.0").is_empty());
+        assert_eq!(super::ua_suffix_candidates("curl/8.4.0"), [None, None]);
+        // When both split points yield the same suffix, inspect it once.
+        assert_eq!(
+            super::ua_suffix_candidates("Mozilla/5.0) 1 OR 1=1"),
+            [Some("1 OR 1=1"), None]
+        );
     }
 
     #[test]

@@ -2,6 +2,9 @@ name: bench
 on:
   pull_request:
     paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'crates/purple-wolf-core/**'
       - '.github/workflows/bench.yml'
 
@@ -15,13 +18,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Establish baseline from main
         run: |
+          set -euo pipefail
           git fetch origin main
-          git checkout origin/main -- crates/purple-wolf-core
-          cargo bench -p purple-wolf-core --bench pipeline -- --save-baseline main
-          git checkout HEAD -- crates/purple-wolf-core
+          baseline_dir="$RUNNER_TEMP/purple-wolf-main"
+          git worktree add --detach "$baseline_dir" origin/main
+          trap 'git worktree remove --force "$baseline_dir"' EXIT
+          (
+            cd "$baseline_dir"
+            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
+              cargo bench --locked -p purple-wolf-core --bench pipeline -- \
+              --save-baseline main
+          )
       - name: Compare PR against baseline (fail >10% regression)
         run: |
-          cargo bench -p purple-wolf-core --bench pipeline -- --baseline main \
+          cargo bench --locked -p purple-wolf-core --bench pipeline -- --baseline main \
             --noise-threshold 0.10 --significance-level 0.05 2>&1 | tee bench.txt
           # criterion exits 0 even on regression; parse the report and gate.
           if grep -E 'Performance has regressed' bench.txt; then

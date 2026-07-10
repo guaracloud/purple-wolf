@@ -8,6 +8,13 @@
 //! crate has no async runtime, no networking, and no global state. It
 //! compiles to native targets and to `wasm32-wasip1`.
 //!
+//! # Cargo features
+//!
+//! The default `toml-config` feature adds `Config::parse` to
+//! [`config::Config`] for native embedders. JSON-only guests can disable
+//! default features to omit the TOML parser dependency;
+//! [`config::Config::parse_json`] remains available.
+//!
 //! # Example: inspect a request
 //!
 //! ```

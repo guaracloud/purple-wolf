@@ -5,10 +5,10 @@
 Only the latest released `v0.x` line receives security updates during
 the v0.x stream. Older patch versions are not backported.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| 0.1.x   | :x: (pre-release; superseded) |
+| Version | Supported |
+| ------- | --------- |
+| Latest 0.4.x patch | :white_check_mark: |
+| 0.3.x and earlier | :x: (superseded) |
 
 ## Reporting a vulnerability
 
@@ -16,16 +16,19 @@ the v0.x stream. Older patch versions are not backported.
 Public issues are indexed by scanners and visible to attackers before
 maintainers can ship a fix.
 
-Use one of the following private channels instead:
+Use one of these private channels:
 
 1. **GitHub Security Advisories (preferred):**
    <https://github.com/guaracloud/purple-wolf/security/advisories/new>
-   This opens a private draft that only repo admins can see; it has
-   a built-in CVE-request workflow once a fix is ready.
+   This opens a private draft visible only to repository administrators and
+   supports coordinated disclosure and CVE requests.
+2. **Email:** **`contact@guaracloud.com`**, with a subject beginning
+   `[purple-wolf security]`. This is the contact address published on the
+   [Guara Cloud GitHub organization](https://github.com/guaracloud).
 
-2. **Email:** `security@guaracloud.example`
-   PGP fingerprint: *(to be published before v0.2.0 stable release;
-   until then prefer the GitHub Security Advisory path)*.
+The project does not currently publish a PGP key. If an email report contains
+sensitive production data, send a high-level description first and ask the
+maintainers to arrange an encrypted exchange.
 
 Please include:
 - Affected version (`cargo pkgid purple-wolf-core` or the GitHub
@@ -44,9 +47,9 @@ Please include:
   acknowledgement, as recommended by Google Project Zero. Critical
   vulnerabilities with active exploitation get an expedited path.
 
-If you don't hear back within those windows, please ping
-`security@guaracloud.example` again - the most likely cause is that
-the report was lost in transit, not ignored.
+If you don't hear back within those windows, follow up through the same private
+channel. Please do not switch to a public issue while the report is under
+embargo.
 
 ## Scope
 
@@ -95,16 +98,16 @@ fix ships, but no later than 90 days from acknowledgement".
 
 ## Cosign signature verification
 
-Every `purple-wolf.wasm` release artifact attached to a GitHub Release
+Every `purple_wolf_traefik.wasm` release artifact attached to a GitHub Release
 is cosign-keyless-signed. To verify before deployment:
 
 ```bash
 cosign verify-blob \
-  --signature purple-wolf.wasm.sig \
-  --certificate purple-wolf.wasm.pem \
+  --signature purple_wolf_traefik.wasm.sig \
+  --certificate purple_wolf_traefik.wasm.pem \
   --certificate-identity-regexp '^https://github\.com/guaracloud/purple-wolf/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  purple-wolf.wasm
+  purple_wolf_traefik.wasm
 ```
 
 The release workflow also runs `cosign verify-blob` against its own

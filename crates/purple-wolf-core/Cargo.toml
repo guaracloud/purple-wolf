@@ -7,14 +7,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish     = true
+
+[features]
+# Native embedders retain the existing TOML API by default. The Traefik guest
+# disables it because its configuration wire format is JSON-only.
+default = ["toml-config"]
+toml-config = ["dep:toml"]
 
 [dependencies]
 serde      = { workspace = true }
 serde_json = { workspace = true }
 aho-corasick = { workspace = true }
 percent-encoding = { workspace = true }
-toml       = "0.8"
+toml       = { version = "0.8", optional = true }
 # governor was removed in v0.2 (NEW-H2) — its DashMap-backed keyed store
 # is unbounded, and on wasm32 it pulls a large futures stack we don't need.
 # Replaced by a tiny in-crate bounded LRU token bucket in

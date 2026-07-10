@@ -33,10 +33,10 @@ jobs:
       - name: Install wasi-sdk
         run: |
           curl -sSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-22/wasi-sdk-22.0-linux.tar.gz | tar xz -C /opt
-          echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> $GITHUB_ENV
+          echo "WASI_SDK_PATH=/opt/wasi-sdk-22.0" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
       - name: Build release wasm
-        run: cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
+        run: cargo build --locked -p purple-wolf-traefik --target wasm32-wasip1 --release
       - name: Stage wasm next to its Dockerfile
         run: cp target/wasm32-wasip1/release/purple_wolf_traefik.wasm crates/purple-wolf-traefik/purple_wolf_traefik.wasm
       - uses: docker/login-action@v3

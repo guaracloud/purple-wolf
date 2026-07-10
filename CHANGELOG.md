@@ -6,6 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-10
+
+### Security
+
+- Update `quinn-proto` to 0.11.15 in the workspace and fuzz lockfiles,
+  resolving `RUSTSEC-2026-0185`, and synchronize the fuzz lockfile with the
+  existing `anyhow` 1.0.103 fix. Replace the placeholder vulnerability-reporting
+  address with Guara Cloud's published contact, retain private GitHub Security
+  Advisories as the preferred channel, and correct the supported release line
+  and signed WASM artifact name.
+
+### Performance
+
+- Make TOML parsing a default-on `purple-wolf-core` feature and disable it for
+  the JSON-only Traefik guest, removing the TOML parser stack from WASM builds.
+  Default users retain `Config::parse`; embedders that disable default features
+  must enable `toml-config` when they need that method.
+- Avoid a heap allocation while deriving SQLi suffix probes from ordinary
+  browser User-Agent values, preserving the existing candidate order and
+  deduplication behavior.
+- Remove the relay's unused dependency on `purple-wolf-core` and compile only
+  the Tokio/Hyper features its HTTP/1 admin server and subscriber client use.
+
+### Reliability
+
+- Test and document the core crate with optional TOML support disabled in CI.
+  Build benchmark baselines from an isolated `origin/main` worktree, include
+  root manifest, lockfile, and toolchain changes in benchmark triggers, and use
+  locked graphs. Require the committed lockfile in release, dev-image, and
+  production relay-container builds.
+- Add crates.io keywords/categories for publishable packages and remove an
+  unmatched license allowance from `cargo-deny` configuration. Complete the
+  Helm chart metadata, make workflow environment-file writes shell-safe, and
+  validate the workflow set with `actionlint`.
+
 ## [0.4.3] - 2026-07-10
 
 ### Security

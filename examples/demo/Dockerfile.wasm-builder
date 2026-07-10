@@ -21,4 +21,4 @@ ENV WASI_SDK_PATH=/opt/wasi-sdk-22.0
 WORKDIR /src
 COPY . .
 
-CMD ["sh", "-c", "cargo build --release -p purple-wolf-traefik --target wasm32-wasip1 && cp target/wasm32-wasip1/release/purple_wolf_traefik.wasm /out/plugin.wasm && cp examples/demo/plugin.traefik.yml /out/.traefik.yml"]
+CMD ["sh", "-c", "cargo build --locked --release -p purple-wolf-traefik --target wasm32-wasip1 && cp target/wasm32-wasip1/release/purple_wolf_traefik.wasm /out/plugin.wasm && cp examples/demo/plugin.traefik.yml /out/.traefik.yml"]

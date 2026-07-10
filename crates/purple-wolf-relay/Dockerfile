@@ -24,7 +24,7 @@ COPY crates ./crates
 
 # The fuzz harness is an excluded workspace member and is intentionally omitted
 # from the production relay build context.
-RUN cargo build --release -p purple-wolf-relay
+RUN cargo build --locked --release -p purple-wolf-relay
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 

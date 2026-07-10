@@ -20,6 +20,6 @@ name = "purple-wolf-validate"
 path = "src/bin/validate.rs"
 
 [dependencies]
-purple-wolf-core = { path = "../purple-wolf-core" }
+purple-wolf-core = { workspace = true, default-features = false }
 serde      = { workspace = true }
 serde_json = { workspace = true }

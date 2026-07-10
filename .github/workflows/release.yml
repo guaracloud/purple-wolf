@@ -56,8 +56,8 @@ jobs:
       - name: Build release WASM and relay
         run: |
           set -euo pipefail
-          cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
-          cargo build --release -p purple-wolf-relay
+          cargo build --locked -p purple-wolf-traefik --target wasm32-wasip1 --release
+          cargo build --locked --release -p purple-wolf-relay
           mkdir -p dist
           cp target/wasm32-wasip1/release/purple_wolf_traefik.wasm dist/purple_wolf_traefik.wasm
           cp target/release/purple-wolf-relay dist/purple-wolf-relay-linux-amd64
@@ -196,7 +196,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          cargo build --release -p purple-wolf-relay --target "$TARGET"
+          cargo build --locked --release -p purple-wolf-relay --target "$TARGET"
           mkdir -p dist
           out="purple-wolf-relay-${TARGET}"
           cp "target/${TARGET}/release/purple-wolf-relay" "dist/${out}"

@@ -7,21 +7,25 @@ rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
 readme                 = "README.md"
+keywords.workspace     = true
+categories.workspace   = true
 
 [[bin]]
 name = "purple-wolf-relay"
 path = "src/main.rs"
 
 [dependencies]
-purple-wolf-core   = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
 serde_yaml         = "0.9"
 percent-encoding   = { workspace = true }
-tokio              = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "io-std", "sync", "process", "net"] }
+tokio              = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "io-std", "sync", "net"] }
 reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-hyper              = { version = "1", features = ["server", "http1"] }
-hyper-util         = { version = "0.1", features = ["tokio", "server-auto"] }
+hyper              = { version = "1", default-features = false, features = ["server", "http1"] }
+# The admin listener explicitly serves HTTP/1 with hyper::server::conn::http1;
+# only TokioIo is needed from hyper-util. The outbound reqwest feature set is
+# unchanged instead of gaining HTTP/2 accidentally through server-auto.
+hyper-util         = { version = "0.1", default-features = false, features = ["tokio"] }
 http-body-util     = "0.1"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

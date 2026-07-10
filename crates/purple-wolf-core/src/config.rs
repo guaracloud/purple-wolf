@@ -207,6 +207,7 @@ pub struct Config {
 
 impl Config {
     /// Parse a TOML configuration string.
+    #[cfg(feature = "toml-config")]
     pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
         toml::from_str(text)
     }
@@ -270,6 +271,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
+    #[cfg(feature = "toml-config")]
     #[test]
     fn parses_full_config() {
         let text = r#"
@@ -289,6 +291,7 @@ mod tests {
         assert!(cfg.groups.injection.is_some());
     }
 
+    #[cfg(feature = "toml-config")]
     #[test]
     fn defaults_reputation_section_when_absent() {
         let text = r#"
@@ -303,6 +306,7 @@ mod tests {
         assert!(cfg.reputation.deny_list.is_empty());
     }
 
+    #[cfg(feature = "toml-config")]
     #[test]
     fn parses_minimal_toml() {
         let text = r#"
@@ -355,9 +359,9 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "toml-config")]
     #[test]
-    fn reputation_section_parses() {
-        // TOML form
+    fn reputation_section_parses_from_toml() {
         let toml_text = r#"
             mode = "enforce"
             fail_mode = "fail_closed"
@@ -371,8 +375,10 @@ mod tests {
         let cfg = Config::parse(toml_text).expect("TOML with reputation should parse");
         assert_eq!(cfg.reputation.per_second, 25);
         assert_eq!(cfg.reputation.deny_list, vec!["10.0.0.1", "203.0.113.5"]);
+    }
 
-        // JSON form
+    #[test]
+    fn reputation_section_parses_from_json() {
         let json = br#"{
             "mode": "enforce",
             "fail_mode": "fail_closed",

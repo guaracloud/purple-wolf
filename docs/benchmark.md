@@ -6,7 +6,7 @@ using the pre-v0.4 live-stack benchmark build against [Coraza](https://coraza.io
 v0.3.0 plugin), under identical Kubernetes deployment topology, same
 backend, same Traefik version, same node, same resource budget.
 
-**Current release note:** purple-wolf v0.4.3 has shipped since this benchmark.
+**Current release note:** purple-wolf v0.4.4 has shipped since this benchmark.
 The round-2 numbers remain the latest published live-stack comparison, but the
 User-Agent SQLi and bare `;wget` misses recorded here are closed in current
 code. A benchmark rerun is still required before updating the live-stack TPR
