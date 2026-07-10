@@ -70,7 +70,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
       - run: ls -lh target/wasm32-wasip1/release/purple_wolf_traefik.wasm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: purple-wolf.wasm, path: target/wasm32-wasip1/release/purple_wolf_traefik.wasm }
 
   fuzz-smoke:
@@ -108,7 +108,7 @@ jobs:
       # (NEW-M11). Raise further as host-side integration coverage lands
       # (e.g. via wasmtime-driven e2e tests).
       - run: cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines 75
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: lcov, path: lcov.info }
 
   docs:
