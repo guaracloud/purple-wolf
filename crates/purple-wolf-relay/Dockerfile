@@ -21,11 +21,9 @@ WORKDIR /src
 # across source-only changes.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY fuzz ./fuzz
 
-# Strip vendored fuzz Cargo.toml's reference to the workspace-internal
-# crate path that doesn't exist in this build context — fuzz/ ships as
-# an excluded workspace member.
+# The fuzz harness is an excluded workspace member and is intentionally omitted
+# from the production relay build context.
 RUN cargo build --release -p purple-wolf-relay
 
 FROM gcr.io/distroless/cc-debian12:nonroot
