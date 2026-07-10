@@ -8,7 +8,7 @@ use purple_wolf_core::{
     config::{BodyConfig, Config, FailMode, GroupMode, Mode, OverCap, ReputationConfig},
     detectors::{
         injection::InjectionDetector, reputation::ReputationDetector,
-        signatures::SignatureDetector, structural::StructuralDetector, Engine, Group,
+        signatures::SignatureDetector, structural::StructuralDetector, Detector, Engine, Group,
     },
     policy::{self, Action},
     request::{self, Request},
@@ -16,24 +16,34 @@ use purple_wolf_core::{
 use std::cell::OnceCell;
 use std::net::IpAddr;
 
-/// Build the engine for one plugin instance, given its config.
-fn engine(cfg: &Config) -> Engine {
-    let ips: Vec<IpAddr> = cfg
-        .reputation
-        .deny_list
-        .iter()
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    Engine::new(vec![
-        Box::new(InjectionDetector),
-        Box::new(SignatureDetector::new()),
-        Box::new(StructuralDetector),
-        Box::new(ReputationDetector::with_capacity(
-            cfg.reputation.per_second,
-            ips,
-            cfg.reputation.max_tracked_ips,
-        )),
-    ])
+/// Build only the detectors this immutable plugin configuration can execute.
+///
+/// http-wasm hosts may pool multiple guest instances for one Middleware. Not
+/// constructing disabled groups avoids repeating their matcher setup and, in
+/// particular, their bounded reputation state for every pooled guest.
+fn engine(cfg: &Config, enabled_groups: &[Group]) -> Engine {
+    let mut detectors: Vec<Box<dyn Detector>> = Vec::with_capacity(enabled_groups.len());
+    for group in enabled_groups {
+        match group {
+            Group::Injection => detectors.push(Box::new(InjectionDetector)),
+            Group::Signatures => detectors.push(Box::new(SignatureDetector::new())),
+            Group::Structural => detectors.push(Box::new(StructuralDetector)),
+            Group::Reputation => {
+                let ips: Vec<IpAddr> = cfg
+                    .reputation
+                    .deny_list
+                    .iter()
+                    .filter_map(|ip| ip.parse().ok())
+                    .collect();
+                detectors.push(Box::new(ReputationDetector::with_capacity(
+                    cfg.reputation.per_second,
+                    ips,
+                    cfg.reputation.max_tracked_ips,
+                )));
+            }
+        }
+    }
+    Engine::new(detectors)
 }
 
 thread_local! {
@@ -110,7 +120,6 @@ fn state<R>(f: impl FnOnce(&PluginState) -> R) -> R {
                     (cfg, true)
                 }
             };
-            let engine = engine(&cfg);
             let group_modes = EffectiveGroupModes::from_config(&cfg);
             let enabled_groups: Vec<Group> = [
                 Group::Injection,
@@ -121,6 +130,7 @@ fn state<R>(f: impl FnOnce(&PluginState) -> R) -> R {
             .into_iter()
             .filter(|group| group_modes.get(*group) != GroupMode::Off)
             .collect();
+            let engine = engine(&cfg, &enabled_groups);
             PluginState {
                 cfg,
                 engine,
@@ -139,7 +149,6 @@ fn state<R>(f: impl FnOnce(&PluginState) -> R) -> R {
 /// `0` = stop, response has already been written by the plugin).
 #[no_mangle]
 pub extern "C" fn handle_request() -> u64 {
-    host::reset_response_taken();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(inspect));
     match result {
         Ok(action) => match action {
@@ -169,10 +178,13 @@ fn inspect() -> Action {
     state(|state| {
         let cfg = &state.cfg;
         // Build header list (lowercased names; values are byte-faithful).
-        let names = host::get_request_header_names();
-        let headers: Vec<(String, String)> = names
-            .iter()
-            .filter_map(|n| host::get_request_header(n).map(|v| (n.to_lowercase(), v)))
+        let headers: Vec<(String, String)> = host::get_request_header_names()
+            .into_iter()
+            .filter_map(|mut name| {
+                let value = host::get_request_header(&name)?;
+                name.make_ascii_lowercase();
+                Some((name, value))
+            })
             .collect();
 
         // Source IP: XFF → X-Real-IP → peer, gated by the configured XFF
@@ -185,10 +197,7 @@ fn inspect() -> Action {
 
         // URI split.
         let uri = host::get_uri();
-        let (path, raw_query) = uri
-            .split_once('?')
-            .map(|(p, q)| (p.to_string(), q.to_string()))
-            .unwrap_or_else(|| (uri.clone(), String::new()));
+        let (path, raw_query) = uri.split_once('?').unwrap_or((uri.as_str(), ""));
         let method = host::get_method();
         let host_hdr = headers
             .iter()
@@ -196,20 +205,37 @@ fn inspect() -> Action {
             .map(|(_, v)| v.clone())
             .unwrap_or_default();
 
-        // Body (capped). Skip the host body stream only when headers prove
-        // there cannot be a body; otherwise inspect the buffered prefix.
+        // Body (capped). HTTP/2 and chunked requests need not have a
+        // Content-Length header, so framing headers cannot safely prove the
+        // absence of a body. Always ask the ABI stream; request buffering is
+        // negotiated and consumed bytes are reconstructed through write_body.
         let cap = cfg.body.max_inspect_bytes;
-        let no_body = request_headers_prove_no_body(&headers);
-        let body_read = if no_body {
-            host::BodyRead::default()
-        } else {
-            host::read_request_body(cap)
+        let preserve_after_cap = cfg.body.over_cap == OverCap::Pass;
+        let body_read = match host::read_request_body(cap, preserve_after_cap) {
+            Ok(body) => body,
+            Err(error) => {
+                host::log(&format!(
+                    "purple-wolf: request-body inspection failed ({error}); applying safe failure policy"
+                ));
+                return match (error.forwarding_is_safe(), cfg.fail_mode) {
+                    (false, _) => {
+                        host::write_response(403, b"request body could not be preserved");
+                        Action::Block
+                    }
+                    (true, FailMode::FailOpen) => Action::Allow,
+                    (true, FailMode::FailClosed) => {
+                        host::write_response(403, b"inspection failed (fail_closed)");
+                        Action::Block
+                    }
+                };
+            }
         };
         let over_cap = body_read.exceeded;
         if over_cap && cfg.body.over_cap == OverCap::Block {
             host::write_response(403, b"body exceeds inspection cap");
             return Action::Block;
         }
+        let body_inspected = !body_read.bytes.is_empty();
         // Always inspect what we buffered — including the prefix of an
         // over-cap body. Previously an over-cap body was discarded wholesale
         // (body_inspected = false), so prepending `maxInspectBytes` of padding
@@ -220,11 +246,11 @@ fn inspect() -> Action {
         let req = Request::build(
             &method,
             &host_hdr,
-            &path,
-            &raw_query,
+            path,
+            raw_query,
             headers,
             body_read.bytes,
-            !no_body,
+            body_inspected,
             source_ip,
         )
         .with_truncated_body(over_cap);
@@ -264,24 +290,6 @@ fn effective_group_mode(cfg: &Config, g: Group) -> GroupMode {
     match gc {
         Some(g) if g.enabled => g.mode,
         _ => GroupMode::Off,
-    }
-}
-
-fn request_headers_prove_no_body(headers: &[(String, String)]) -> bool {
-    let mut content_length = None;
-    for (name, value) in headers {
-        if name.eq_ignore_ascii_case("transfer-encoding") && !value.trim().is_empty() {
-            return false;
-        }
-        if name.eq_ignore_ascii_case("content-length") {
-            content_length = Some(value.as_str());
-        }
-    }
-    match content_length {
-        None => true,
-        Some(value) => value
-            .split(',')
-            .all(|part| part.trim().parse::<u64>().is_ok_and(|n| n == 0)),
     }
 }
 
@@ -341,7 +349,7 @@ pub extern "C" fn handle_response(_req_ctx: u32, _is_error: u32) {}
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-    use super::{parse_peer, request_headers_prove_no_body};
+    use super::parse_peer;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
@@ -395,31 +403,5 @@ mod tests {
             parse_peer("not-an-ip:5555"),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
         );
-    }
-
-    #[test]
-    fn no_body_fast_path_requires_absent_or_zero_length_and_no_transfer_encoding() {
-        assert!(request_headers_prove_no_body(&[]));
-        assert!(request_headers_prove_no_body(&[(
-            "content-length".into(),
-            "0".into()
-        )]));
-        assert!(request_headers_prove_no_body(&[(
-            "content-length".into(),
-            "0, 0".into()
-        )]));
-
-        assert!(!request_headers_prove_no_body(&[(
-            "content-length".into(),
-            "12".into()
-        )]));
-        assert!(!request_headers_prove_no_body(&[(
-            "content-length".into(),
-            "not-a-number".into()
-        )]));
-        assert!(!request_headers_prove_no_body(&[(
-            "transfer-encoding".into(),
-            "chunked".into()
-        )]));
     }
 }

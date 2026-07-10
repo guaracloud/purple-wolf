@@ -1,0 +1,175 @@
+# Ephemeral homelab stack for testing a locally-built plugin artifact.
+#
+# The binary ConfigMap is intentionally created out-of-band so this manifest
+# never embeds a generated Wasm blob:
+#   alias kh='kubectl --context homelab'
+#   kh create namespace purple-wolf-local-test
+#   kh -n purple-wolf-local-test create configmap purple-wolf-local-wasm \
+#     --from-file=plugin.wasm=target/wasm-docker/plugin.wasm
+#   kh apply -f tests/traefik_integration/homelab.yaml
+#
+# Delete the namespace after the test; nothing here should target another
+# cluster or an existing application namespace.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: purple-wolf-local-config
+  namespace: purple-wolf-local-test
+data:
+  traefik.yml: |
+    entryPoints:
+      web:
+        address: ":8080"
+    providers:
+      file:
+        filename: /etc/traefik/dynamic.yml
+        watch: false
+    experimental:
+      localPlugins:
+        purpleWolf:
+          moduleName: github.com/guaracloud/purple-wolf
+    log:
+      level: INFO
+  dynamic.yml: |
+    http:
+      routers:
+        test:
+          rule: "PathPrefix(`/`)"
+          entryPoints: [web]
+          service: whoami
+          middlewares: [waf]
+      services:
+        whoami:
+          loadBalancer:
+            servers:
+              - url: http://localhost:8000
+      middlewares:
+        waf:
+          plugin:
+            purpleWolf:
+              mode: enforce
+              body: { maxInspectBytes: 4096, overCap: pass }
+              groups:
+                injection: { enabled: true, mode: enforce }
+                signatures: { enabled: true, mode: enforce }
+  .traefik.yml: |
+    displayName: purple-wolf local test
+    type: middleware
+    runtime: wasm
+    import: github.com/guaracloud/purple-wolf
+    summary: Local artifact homelab validation
+    testData:
+      mode: monitor
+      groups:
+        injection: { enabled: true, mode: monitor }
+  upstream.py: |
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class EchoHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            self.respond(b"ok")
+
+        def do_POST(self):
+            self.respond(self.read_body())
+
+        def read_body(self):
+            if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+                chunks = []
+                while True:
+                    size = int(self.rfile.readline().split(b";", 1)[0], 16)
+                    if size == 0:
+                        while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                            pass
+                        return b"".join(chunks)
+                    chunks.append(self.rfile.read(size))
+                    if self.rfile.read(2) != b"\r\n":
+                        raise ValueError("malformed chunk terminator")
+            length = int(self.headers.get("Content-Length", "0"))
+            return self.rfile.read(length)
+
+        def respond(self, body):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            pass
+
+    ThreadingHTTPServer(("0.0.0.0", 8000), EchoHandler).serve_forever()
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: purple-wolf-local
+  namespace: purple-wolf-local-test
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: purple-wolf-local }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: purple-wolf-local }
+    spec:
+      containers:
+        - name: upstream
+          image: docker.io/python:3-alpine
+          command: ["python", "/app/upstream.py"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /app/upstream.py
+              subPath: upstream.py
+              readOnly: true
+        - name: traefik
+          image: docker.io/traefik:v3.1
+          args: ["--configFile=/etc/traefik/traefik.yml"]
+          ports:
+            - { name: web, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /, port: web }
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/traefik/traefik.yml
+              subPath: traefik.yml
+              readOnly: true
+            - name: config
+              mountPath: /etc/traefik/dynamic.yml
+              subPath: dynamic.yml
+              readOnly: true
+            - name: config
+              mountPath: /plugins-local/src/github.com/guaracloud/purple-wolf/.traefik.yml
+              subPath: .traefik.yml
+              readOnly: true
+            - name: wasm
+              mountPath: /plugins-local/src/github.com/guaracloud/purple-wolf/plugin.wasm
+              subPath: plugin.wasm
+              readOnly: true
+      volumes:
+        - name: config
+          configMap: { name: purple-wolf-local-config }
+        - name: wasm
+          configMap: { name: purple-wolf-local-wasm }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: purple-wolf-local
+  namespace: purple-wolf-local-test
+spec:
+  selector: { app.kubernetes.io/name: purple-wolf-local }
+  ports:
+    - { name: web, port: 8080, targetPort: web }

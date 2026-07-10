@@ -1,4 +1,14 @@
-FROM rust:1.95-slim
+# wasi-sdk 22 publishes a Linux toolchain for x86_64 only. Pin this build
+# stage to amd64 so it also works predictably on arm64 Docker hosts via the
+# runtime's transparent emulation instead of trying to execute x86 clang in
+# an arm64 image.
+ARG WASI_SDK_PLATFORM=linux/amd64
+FROM --platform=${WASI_SDK_PLATFORM} rust:1.95-slim
+
+# The workspace tracks `stable`, which would otherwise override the image tag
+# and make every container run contact Rust's update server. Use the toolchain
+# already installed by the pinned base image; the target is installed below.
+ENV RUSTUP_TOOLCHAIN=1.95.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \

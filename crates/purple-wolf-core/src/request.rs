@@ -86,10 +86,12 @@ impl Request {
     ) -> Request {
         let query_params = parse_query(raw_query);
         let header_bytes: usize = headers.iter().map(|(k, v)| k.len() + v.len()).sum();
-        let headers: Vec<(String, String)> = headers
-            .into_iter()
-            .map(|(k, v)| (k.to_ascii_lowercase(), v))
-            .collect();
+        let mut headers = headers;
+        for (name, _) in &mut headers {
+            // Header names are ASCII by definition. Mutating the owned name
+            // avoids allocating a second String for every header.
+            name.make_ascii_lowercase();
+        }
         let inspectable_headers = build_inspectable_headers(&headers);
         let raw_query = if raw_query.is_empty() {
             None
@@ -304,9 +306,14 @@ fn build_inspectable_headers(headers: &[(String, String)]) -> Vec<Vec<u8>> {
             || k.starts_with(INSPECTABLE_HEADER_PREFIX)
         {
             out.push(v.as_bytes().to_vec());
-            let decoded = decode(v);
-            if decoded != *v {
-                out.push(decoded.into_bytes());
+            // `percent_decode_str(...).into_owned()` allocates even when the
+            // string contains no escape. Most header values have no `%`, so
+            // keep their common path to the one required raw-value copy.
+            if v.as_bytes().contains(&b'%') {
+                let decoded = decode(v);
+                if decoded != *v {
+                    out.push(decoded.into_bytes());
+                }
             }
         }
     }
@@ -360,13 +367,13 @@ pub fn client_ip(headers: &[(String, String)], peer: IpAddr, trust_hops: usize) 
     if trust_hops > 0 {
         for (k, v) in headers {
             if k.eq_ignore_ascii_case("x-forwarded-for") {
-                let parts: Vec<&str> = v.split(',').map(str::trim).collect();
+                let part_count = v.split(',').count();
                 // Peel `trust_hops` rightmost entries; if we peel everything,
                 // there's no untrusted hop left, so the request originated
                 // *from* one of our trusted proxies — return `peer`.
-                if parts.len() > trust_hops {
-                    let cut = parts.len() - trust_hops;
-                    for part in &parts[..cut] {
+                if part_count > trust_hops {
+                    let untrusted_count = part_count - trust_hops;
+                    for part in v.split(',').take(untrusted_count).map(str::trim) {
                         if let Ok(ip) = part.parse::<IpAddr>() {
                             return ip;
                         }

@@ -1,7 +1,8 @@
 //! purple-wolf-traefik: http-wasm guest plugin wrapping `purple-wolf-core`.
 //!
-//! Loaded once into a shared Traefik HA deployment; one plugin instance is
-//! constructed per `Middleware` CRD that references it.
+//! Traefik compiles the module through a shared wazero cache. Each configured
+//! `Middleware` owns an http-wasm host middleware whose guest pool may contain
+//! multiple independent WASM instances under concurrency.
 
 // Panic-surface discipline (see purple-wolf-core/src/lib.rs for the full
 // rationale): unwinding is unavailable on `wasm32-wasip1`, so a panic in the

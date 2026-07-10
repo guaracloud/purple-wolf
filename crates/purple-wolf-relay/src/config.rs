@@ -302,6 +302,9 @@ pub fn validate(cfg: &Config) -> anyhow::Result<Resolved> {
     if cfg.sources.is_empty() {
         anyhow::bail!("config: at least one source must be configured");
     }
+    if cfg.relay.subscriber_queue == 0 {
+        anyhow::bail!("relay.subscriber_queue must be greater than zero");
+    }
     if cfg.subscribers.is_empty() {
         tracing::warn!("config: no subscribers configured; relay will start but deliver nothing");
     }
@@ -581,6 +584,23 @@ mod tests {
         .unwrap();
         let resolved = validate(&cfg).unwrap();
         assert!(resolved.subscriber_secrets.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_zero_subscriber_queue_before_runtime_channel_creation() {
+        let cfg = load_from_str(
+            r#"
+            sources: [{ type: stdin }]
+            subscribers: []
+            relay: { subscriber_queue: 0 }
+            "#,
+        )
+        .unwrap();
+        let error = validate(&cfg).unwrap_err();
+        assert!(
+            error.to_string().contains("subscriber_queue"),
+            "err: {error}"
+        );
     }
 
     #[test]

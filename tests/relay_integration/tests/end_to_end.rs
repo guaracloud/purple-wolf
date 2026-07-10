@@ -46,11 +46,8 @@ fn compose_up() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            "shared/traefik.log",
-            std::fs::Permissions::from_mode(0o666),
-        )
-        .expect("make shared Traefik log writable");
+        std::fs::set_permissions("shared/traefik.log", std::fs::Permissions::from_mode(0o666))
+            .expect("make shared Traefik log writable");
     }
     let _ = Command::new("docker")
         .args(["compose", "down", "-v"])
@@ -97,10 +94,7 @@ fn full_stack_delivers_envelope_with_labels_to_subscriber() {
 
     let text = std::fs::read_to_string("shared/requests.jsonl")
         .expect("subscriber didn't record any requests");
-    let line = text
-        .lines()
-        .next()
-        .expect("requests.jsonl is empty");
+    let line = text.lines().next().expect("requests.jsonl is empty");
     let v: serde_json::Value = serde_json::from_str(line).unwrap();
     let body = &v["body"];
     assert_eq!(body["schema"], "purple-wolf.audit/v1");

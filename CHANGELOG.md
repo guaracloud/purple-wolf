@@ -6,6 +6,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-09
+
+### Security
+
+- Negotiate http-wasm request buffering and inspect bodies regardless of
+  Content-Length framing. Fixed-length and chunked request bodies are now
+  preserved byte-for-byte for the backend, while SQLi in either framing is
+  blocked consistently.
+- Bound host-controlled header aggregate lengths and value counts before
+  allocating guest memory, and fail closed if a body stream becomes unsafe to
+  forward after reconstruction has started.
+- Update `anyhow` to 1.0.103, resolving `RUSTSEC-2026-0190`.
+
+### Performance
+
+- Normalize owned header names in place, skip percent-decoding work for common
+  header values without `%`, and resolve X-Forwarded-For without a temporary
+  vector. Controlled Criterion runs measured faster request construction and
+  client-IP resolution without changing normalization semantics.
+- Construct only enabled detector groups and grow reputation storage from a
+  small initial allocation instead of reserving 50,000 entries in every pooled
+  WASM guest.
+
+### Reliability
+
+- Reject `relay.subscriber_queue: 0` during configuration validation instead
+  of allowing Tokio channel construction to panic at startup.
+- Add byte-faithful real-Traefik body regressions, prebuilt-WASM integration
+  support, and an isolated homelab validation manifest.
+- Make the Docker WASI builder work on arm64 hosts through an explicitly
+  emulated amd64 stage, and exclude build artifacts from Docker contexts.
+- Correct lifecycle, body-cap, reputation-scope, relay-durability, and
+  `Retry-After` documentation to match the implemented behavior.
+
 ## [0.4.1] - 2026-06-10
 
 ### Fixed
@@ -213,25 +247,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 1. Update `## [Unreleased]` in this file with a summary of changes under the
    sections of `Added`, `Changed`, `Fixed`, `Removed`.
-2. Decide the next version (semver - `cargo-release` defaults to patch).
-3. From a clean working tree on a release branch:
+2. Bump the shared workspace version, core path-version pin, lockfiles, Helm
+   chart, and versioned installation examples.
+3. From a clean working tree, run the same local gates as CI:
    ```bash
-   git checkout -b release/v0.2.0
-   cargo release 0.2.0 --execute
+   cargo fmt --all --check
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace --all-targets
+   cargo test --workspace --doc
+   cargo deny check
    ```
-   cargo-release will:
-   - bump `[workspace.package].version` to `0.2.0` (shared-version)
-   - commit `chore(release): 0.2.0` (signed)
-   - tag `v0.2.0` (signed)
-   - push branch and tag to `origin`
-4. The push of the `v*` tag triggers `.github/workflows/release.yml`, which:
-   - builds the release `.wasm` against `wasm32-wasip1`
-   - computes a SHA256 and cosign-signs the blob (keyless OIDC)
-   - re-verifies the signature against its own certificate identity
-     (fail-closed)
-   - creates a GitHub Release with the `.wasm`, `.sha256`, `.sig`, `.pem`
-     attached
-   - dry-runs and then publishes `purple-wolf-core` to crates.io
-     (requires `CARGO_REGISTRY_TOKEN` secret + the `release` environment
-     gate)
-5. Open a PR back to `main` from the release branch, merge after CI passes.
+4. Land the release commit on `main` and wait for every workflow triggered by
+   that exact commit to succeed before tagging it.
+5. Create and push an annotated `vX.Y.Z` tag on the verified `main` commit.
+   The tag triggers `.github/workflows/release.yml`, which builds the release
+   WASM and relay binaries, publishes signed GHCR images and the OCI Helm chart,
+   generates SPDX SBOMs, checksums and keyless Cosign signatures, creates the
+   GitHub Release, and verifies every published asset before uploading the
+   signed release manifest.
+6. Wait for the release workflow to succeed, then follow
+   [`docs/release-verification.md`](docs/release-verification.md) against the
+   published tag.

@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-core"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "aho-corasick",
  "cc",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "purple-wolf-relay"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1033,6 +1033,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "notify",
+ "percent-encoding",
  "prometheus",
  "purple-wolf-core",
  "rand 0.8.6",

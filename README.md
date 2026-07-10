@@ -2,14 +2,15 @@
 
 A fast, low-memory Web Application Firewall delivered as a Traefik plugin.
 
-**Status:** v0.4.1 released. The current release includes audit labels,
+**Status:** v0.4.2 released. The current release includes audit labels,
 webhook relay delivery, signed artifacts, SBOMs, Helm OCI packaging,
 Kustomize overlays, an O(1) reputation limiter, bounded
 percent-decode-to-fixpoint normalization, an expanded signature pack,
 User-Agent SQLi suffix probing, over-cap body-prefix inspection, an offline
 config validator, relay SSRF hardening, optional relay admin auth, and new
-fuzz targets. v0.4.1 keeps `/readyz` unauthenticated even when relay admin
-auth is enabled, so Kubernetes readiness probes keep working. See
+fuzz targets. v0.4.2 fixes fixed-length and chunked request-body preservation,
+reduces request-normalization and pooled-guest allocation costs, and hardens
+host-controlled ABI reads. See
 [CHANGELOG.md](CHANGELOG.md) for the full list,
 [THREAT_MODEL.md](THREAT_MODEL.md) for what the WAF is and is not designed
 to catch, and [docs/configuration.md](docs/configuration.md) for the
@@ -29,11 +30,13 @@ rate limiting / deny-listing.
 
 ```
 internet → Traefik (TLS, routing, your existing setup)
-              └─ loads purple-wolf.wasm once at startup
+              └─ compiles purple-wolf.wasm with wazero's shared cache
               └─ for each request matching a route that chains a
                  purple-wolf Middleware:
-                   instantiate plugin with that Middleware's config
-                   → inspect → allow or block → forward to backend
+                   borrow a guest instance from the host pool
+                   → normalize → inspect enabled groups → decide policy
+                   → emit noteworthy audit line
+                   → block with 403 or restore the body and call backend
 ```
 
 - Three crates:
@@ -44,8 +47,10 @@ internet → Traefik (TLS, routing, your existing setup)
   [`purple-wolf-relay`](crates/purple-wolf-relay) - a standalone
   webhook fan-out service that tails Traefik's audit-log stream and
   delivers HMAC-signed events to subscribers.
-- Multi-tenant by construction: each `Middleware` CRD is a separate plugin
-  instantiation with its own slice of WASM memory.
+- Multi-tenant by construction: each `Middleware` config creates a separate
+  host middleware. The http-wasm host pools guest instances for concurrency;
+  every guest has independent WASM memory, immutable config, detector state,
+  and reputation buckets.
 - **Push delivery:** the WAF stays focused on detection; if you
   want signed webhooks to a SIEM, Slack, or per-tenant subscriber, run
   the relay alongside Traefik. See the relay's
@@ -71,7 +76,7 @@ Install the OCI Helm chart in monitor mode:
 
 ```bash
 helm install purple-wolf oci://ghcr.io/guaracloud/charts/purple-wolf \
-  --version 0.4.1 \
+  --version 0.4.2 \
   -f charts/purple-wolf/values.monitor.yaml
 ```
 
@@ -91,7 +96,7 @@ Before production use, verify checksums, Cosign signatures, SBOMs, image
 digests, and the release manifest:
 
 ```bash
-gh release download v0.4.1 --repo guaracloud/purple-wolf --dir purple-wolf-release
+gh release download v0.4.2 --repo guaracloud/purple-wolf --dir purple-wolf-release
 ```
 
 Follow [`docs/release-verification.md`](docs/release-verification.md) and deploy
@@ -167,7 +172,17 @@ cargo deny check
 cargo build -p purple-wolf-traefik --target wasm32-wasip1 --release
 ```
 
-WASM builds require `wasi-sdk`. macOS arm64 dev setup:
+WASM builds require `wasi-sdk`. To use the repository's cross-platform Docker
+builder (including on arm64 hosts):
+
+```bash
+mkdir -p target/wasm-docker
+docker build -f examples/demo/Dockerfile.wasm-builder -t purple-wolf-wasm-builder .
+docker run --rm -v "$PWD/target/wasm-docker:/out" purple-wolf-wasm-builder
+```
+
+For a native toolchain install, download wasi-sdk and set its root:
+
 ```bash
 # Download wasi-sdk from https://github.com/WebAssembly/wasi-sdk/releases
 export WASI_SDK_PATH=/path/to/wasi-sdk

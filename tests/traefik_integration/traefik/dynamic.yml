@@ -22,6 +22,7 @@ http:
       plugin:
         purpleWolf:
           mode: enforce
+          body: { maxInspectBytes: 4096, overCap: pass }
           # v0.3 labels: arbitrary key=value metadata echoed verbatim into
           # every audit-log line for this Middleware. The audit-log
           # assertion in end_to_end.rs reads these back.

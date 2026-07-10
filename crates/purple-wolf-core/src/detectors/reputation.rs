@@ -1,7 +1,6 @@
 use crate::clock::{Clock, SystemClock};
 use crate::detectors::{Detector, Group, Severity, Verdict};
 use crate::request::Request;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
@@ -11,6 +10,9 @@ use std::time::Duration;
 /// `usize::MAX` is safe because the slab can never grow that large —
 /// `cap` is bounded by `max_tracked_ips`.
 const NIL: usize = usize::MAX;
+/// Avoid reserving the full attacker-controlled key budget in every pooled
+/// WASM guest before the first IP is observed. The stores still grow to `cap`.
+const INITIAL_CAPACITY: usize = 64;
 
 /// Bounded LRU token bucket keyed by source IP, with **O(1)** eviction.
 ///
@@ -70,9 +72,10 @@ impl<C: Clock> LruTokenBuckets<C> {
     fn new(quota_per_sec: u32, cap: usize, clock: C) -> LruTokenBuckets<C> {
         // A cap of 0 would leave nothing to track; treat it as 1.
         let cap = cap.max(1);
+        let initial_capacity = cap.min(INITIAL_CAPACITY);
         LruTokenBuckets {
-            index: HashMap::with_capacity(cap),
-            slab: Vec::with_capacity(cap),
+            index: HashMap::with_capacity(initial_capacity),
+            slab: Vec::with_capacity(initial_capacity),
             head: NIL,
             tail: NIL,
             cap,
@@ -288,13 +291,6 @@ impl Detector for ReputationDetector {
     }
 }
 
-// `RefCell` is intentionally not used at module scope; the field above is
-// `Mutex` for Sync. The detector list passed to `Engine` is `Box<dyn
-// Detector + Send + Sync>` and `Mutex<T>` is `Sync` when `T: Send`.
-// (The `RefCell` import below is for tests only.)
-#[allow(dead_code)]
-fn _silence_refcell_import_for_tests(_x: RefCell<()>) {}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -318,6 +314,15 @@ mod tests {
         let det = ReputationDetector::new(1000, vec!["9.9.9.9".parse().unwrap()]);
         let v = det.inspect(&req_from("9.9.9.9"));
         assert!(v.iter().any(|x| x.rule == "ip_denied"));
+    }
+
+    #[test]
+    fn large_tracking_limit_does_not_eagerly_reserve_the_full_budget() {
+        let buckets = LruTokenBuckets::new(100, 50_000, SystemClock::new());
+        assert_eq!(buckets.slab.len(), 0);
+        assert_eq!(buckets.index.len(), 0);
+        assert!(buckets.slab.capacity() <= INITIAL_CAPACITY);
+        assert!(buckets.index.capacity() < 50_000);
     }
 
     #[test]

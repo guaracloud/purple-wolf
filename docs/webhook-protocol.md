@@ -98,7 +98,7 @@ delivery failure). Configure your URL to be the final destination.
 |---|---|
 | `2xx` | Delivered; relay marks the attempt complete and discards the envelope. |
 | `408 Request Timeout` | Retryable; relay re-attempts per its retry policy. |
-| `429 Too Many Requests` | Retryable; relay honors `Retry-After` when present (capped at the configured `max_delay_ms`). |
+| `429 Too Many Requests` | Retryable; delay follows the configured exponential-backoff schedule. `Retry-After` is not currently interpreted. |
 | `5xx` | Retryable; relay re-attempts per its retry policy. |
 | `3xx` | **Failure.** Relay does not follow redirects. |
 | `4xx` (except 408, 429) | **Permanent failure.** Envelope goes to the DLQ; no retries. |
@@ -152,8 +152,11 @@ one after the rotation window closes.
 
 ## 4. Idempotency
 
-The relay is at-least-once. Subscribers achieve at-most-once (and thus
-exactly-once) by deduping on `event_id`.
+The relay retries a delivery in process, so a subscriber can see the same
+event more than once. It is not a durable at-least-once queue: bounded channel
+drops, process crashes, and the in-memory DLQ can lose an event. Subscribers
+achieve at-most-once side effects for observed retries by deduping on
+`event_id`.
 
 **Required:**
 

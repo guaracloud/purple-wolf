@@ -19,9 +19,9 @@ spec:
   # coordinated.
   replicas: 1
   strategy:
-    # The pipeline is at-least-once; a brief gap during rollout is
-    # fine, double-delivery is worse - RollingUpdate with
-    # maxUnavailable=1 is safer here than the default Recreate.
+    # Queues and the DLQ are in-memory, so a brief rollout gap can lose
+    # events. Avoid overlapping instances with independent bookmarks and
+    # DLQs: RollingUpdate with maxUnavailable=1 is safer than the default.
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
@@ -44,7 +44,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: relay
-          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.1
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.2
           imagePullPolicy: IfNotPresent
           args:
             - --config=/etc/purple-wolf-relay/relay.yaml

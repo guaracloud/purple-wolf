@@ -1,12 +1,14 @@
 services:
   upstream:
     image: python:3-alpine
-    command: ["python", "-m", "http.server", "8000"]
+    command: ["python", "/app/upstream.py"]
+    volumes:
+      - ./upstream.py:/app/upstream.py:ro
   traefik:
     image: traefik:v3
     command:
       - "--configFile=/etc/traefik/traefik.yml"
-    ports: ["8080:8080"]
+    ports: ["${PURPLE_WOLF_TRAEFIK_PORT:-8080}:8080"]
     volumes:
       - ./traefik:/etc/traefik:ro
       # Traefik local-plugin layout: <pluginsDir>/src/<moduleName>/
