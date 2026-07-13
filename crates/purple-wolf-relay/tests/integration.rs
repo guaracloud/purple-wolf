@@ -10,7 +10,6 @@
 //! This exercises the full pipeline: stdin source → parser → fan-out
 //! → HTTP sink → HMAC signer → reqwest POST.
 
-use std::io::Write;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -77,15 +76,14 @@ relay:
         .env("INTEGRATION_SECRET", SECRET)
         // Trim relay noise out of cargo test output unless the test fails.
         .env("RUST_LOG", "warn")
+        .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn relay");
-
-    // Wait for the relay to come up (pipeline-ready log appears on
-    // stderr). For an integration test, a small sleep is acceptable.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    let mut child_stdout = child.stdout.take().expect("child stdout");
+    let mut child_stderr = child.stderr.take().expect("child stderr");
 
     // Pipe a known audit-log line (the exact format the WAF emits).
     let audit_line = br#"{"host":"checkout.acme.example","path":"/api/v1/cart","query":"id=1%27+OR+%271%27%3D%271","method":"POST","source_ip":"203.0.113.7","action":"block","blocked_rule":"injection/sqli","blocked_severity":"critical","blocked_detail":"SQLi","would_block_rules":["reputation/rate_limited"],"labels":{"tenant":"acme","service":"checkout"}}"#;
@@ -99,18 +97,39 @@ relay:
         drop(stdin);
     }
 
-    // Wait briefly for the delivery to land at wiremock.
-    for _ in 0..40 {
-        if !mock
-            .received_requests()
-            .await
-            .unwrap_or_default()
-            .is_empty()
-        {
-            break;
+    // Finite sources must not complete until subscriber queues drain. Waiting
+    // for the relay's natural exit proves the delivery attempt finished and
+    // avoids a wall-clock polling race on slower toolchains or CI runners.
+    let status = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(result) => Some(result.expect("wait for relay process")),
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            None
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    use tokio::io::AsyncReadExt;
+    let (stdout_result, stderr_result) = tokio::join!(
+        child_stdout.read_to_end(&mut stdout),
+        child_stderr.read_to_end(&mut stderr)
+    );
+    stdout_result.expect("read relay stdout");
+    stderr_result.expect("read relay stderr");
+    let status = status.unwrap_or_else(|| {
+        panic!(
+            "relay did not drain and exit within 10 seconds\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        )
+    });
+    assert!(
+        status.success(),
+        "relay exited unsuccessfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
 
     // Snapshot received requests.
     let received = mock.received_requests().await.unwrap();
@@ -148,11 +167,4 @@ relay:
     assert_eq!(env["labels"]["service"], "checkout");
     assert_eq!(env["event"]["action"], "block");
     assert_eq!(env["event"]["blocked_rule"], "injection/sqli");
-
-    // Tear down: send SIGTERM (or kill on Windows). On Unix we use
-    // the public start_kill API.
-    let _ = child.kill().await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-    // Silence "unused" warning on the writer import.
-    let _ = std::io::stderr().flush();
 }

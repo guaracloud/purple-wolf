@@ -96,6 +96,32 @@ fn signature_request() -> Request {
     )
 }
 
+fn repeated_signature_request() -> Request {
+    Request::build(
+        "POST",
+        "example.com",
+        "/render",
+        "",
+        vec![],
+        vec![b'`'; 16 * 1024],
+        true,
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 17)),
+    )
+}
+
+fn deny_list(len: u32) -> Vec<IpAddr> {
+    (0..len)
+        .map(|i| {
+            IpAddr::V4(Ipv4Addr::new(
+                10,
+                ((i >> 16) & 0xff) as u8,
+                ((i >> 8) & 0xff) as u8,
+                (i & 0xff) as u8,
+            ))
+        })
+        .collect()
+}
+
 fn bench(c: &mut Criterion) {
     let engine = Engine::new(vec![
         Box::new(InjectionDetector),
@@ -158,6 +184,10 @@ fn bench(c: &mut Criterion) {
     c.bench_function("detector/signatures", |b| {
         b.iter(|| signature_detector.inspect(&signature_request()))
     });
+    let repeated_signature_request = repeated_signature_request();
+    c.bench_function("detector/signatures_repeated_literal_16k", |b| {
+        b.iter(|| signature_detector.inspect(black_box(&repeated_signature_request)))
+    });
 
     c.bench_function("request/build_realistic_headers", |b| {
         b.iter(|| black_box(realistic_browser_request()))
@@ -174,6 +204,36 @@ fn bench(c: &mut Criterion) {
 
     c.bench_function("reputation/construct_default", |b| {
         b.iter(|| black_box(ReputationDetector::with_capacity(100, Vec::new(), 50_000)))
+    });
+
+    let reputation_request = benign_bodyless_get();
+    let empty_deny_list = ReputationDetector::with_capacity(u32::MAX, Vec::new(), 1);
+    c.bench_function("reputation/deny_list_empty", |b| {
+        b.iter(|| empty_deny_list.inspect(black_box(&reputation_request)))
+    });
+
+    // Exercise both sides of the hybrid Vec/HashSet cutoff. A miss is the
+    // ordinary request path for an operator-maintained deny list.
+    let deny_list_miss_63 = ReputationDetector::with_capacity(u32::MAX, deny_list(63), 1);
+    c.bench_function("reputation/deny_list_miss_63", |b| {
+        b.iter(|| deny_list_miss_63.inspect(black_box(&reputation_request)))
+    });
+    let deny_list_miss_64 = ReputationDetector::with_capacity(u32::MAX, deny_list(64), 1);
+    c.bench_function("reputation/deny_list_miss_64", |b| {
+        b.iter(|| deny_list_miss_64.inspect(black_box(&reputation_request)))
+    });
+
+    let large_deny_list = deny_list(4096);
+    let deny_list_miss = ReputationDetector::with_capacity(u32::MAX, large_deny_list.clone(), 1);
+    c.bench_function("reputation/deny_list_miss_4096", |b| {
+        b.iter(|| deny_list_miss.inspect(black_box(&reputation_request)))
+    });
+
+    let mut tail_hit_list = large_deny_list;
+    tail_hit_list.push(reputation_request.source_ip);
+    let deny_list_tail_hit = ReputationDetector::with_capacity(u32::MAX, tail_hit_list, 1);
+    c.bench_function("reputation/deny_list_tail_hit_4097", |b| {
+        b.iter(|| deny_list_tail_hit.inspect(black_box(&reputation_request)))
     });
 }
 

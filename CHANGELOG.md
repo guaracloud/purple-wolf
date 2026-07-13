@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-13
+
+### Performance
+
+- Bound literal-signature verdict allocation to one finding per static pattern
+  per request, and use hashed membership for reputation deny lists above the
+  small-list threshold while retaining the linear path for small/default lists.
+- Align the relay's direct `rand` dependency with the version already used by
+  `ulid`, removing a duplicate `rand`/`rand_core`/`rand_chacha` stack.
+
+### Fixed
+
+- Supervise relay source, parser, pipeline, and admin tasks so unrecoverable
+  failures clear readiness, stop the remaining task graph, and propagate to the
+  process instead of leaving a ready-but-inert relay waiting for a signal.
+- Isolate `origin/main` and pull-request Cargo target directories in benchmark
+  CI, copying only Criterion's saved measurements between them so compiled
+  artifacts cannot be reused across different worktrees.
+- Accept the documented `ip:port` and bracketed IPv6-with-port forms in
+  `reputation.denyList` instead of silently dropping them during detector setup.
+- Replace wall-clock relay integration polling with bounded process-exit and
+  drain synchronization plus captured diagnostics, eliminating slow-run races.
+
 ### Changed
 
 - Move GitHub release uploads to the Node 24-based

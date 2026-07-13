@@ -1,7 +1,7 @@
 use crate::clock::{Clock, SystemClock};
 use crate::detectors::{Detector, Group, Severity, Verdict};
 use crate::request::Request;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -13,6 +13,10 @@ const NIL: usize = usize::MAX;
 /// Avoid reserving the full attacker-controlled key budget in every pooled
 /// WASM guest before the first IP is observed. The stores still grow to `cap`.
 const INITIAL_CAPACITY: usize = 64;
+/// Keep modest operator lists on the existing linear path without an extra
+/// hash-table allocation; hash larger lists so attacker-controlled membership
+/// checks do not scale with list size.
+const HASHED_DENY_LIST_MIN_LEN: usize = 64;
 
 /// Bounded LRU token bucket keyed by source IP, with **O(1)** eviction.
 ///
@@ -228,7 +232,29 @@ fn consume(tokens: &mut f64) -> bool {
 /// uncontended in production.
 pub struct ReputationDetector {
     state: Mutex<LruTokenBuckets<SystemClock>>,
-    deny_list: Vec<IpAddr>,
+    deny_list: DenyList,
+}
+
+enum DenyList {
+    Linear(Vec<IpAddr>),
+    Hashed(HashSet<IpAddr>),
+}
+
+impl DenyList {
+    fn new(entries: Vec<IpAddr>) -> Self {
+        if entries.len() < HASHED_DENY_LIST_MIN_LEN {
+            DenyList::Linear(entries)
+        } else {
+            DenyList::Hashed(entries.into_iter().collect())
+        }
+    }
+
+    fn contains(&self, ip: &IpAddr) -> bool {
+        match self {
+            DenyList::Linear(entries) => entries.contains(ip),
+            DenyList::Hashed(entries) => entries.contains(ip),
+        }
+    }
 }
 
 impl ReputationDetector {
@@ -254,7 +280,7 @@ impl ReputationDetector {
                 max_tracked_ips,
                 SystemClock::new(),
             )),
-            deny_list,
+            deny_list: DenyList::new(deny_list),
         }
     }
 }
@@ -314,6 +340,14 @@ mod tests {
         let det = ReputationDetector::new(1000, vec!["9.9.9.9".parse().unwrap()]);
         let v = det.inspect(&req_from("9.9.9.9"));
         assert!(v.iter().any(|x| x.rule == "ip_denied"));
+    }
+
+    #[test]
+    fn duplicate_deny_list_entries_still_emit_one_verdict() {
+        let denied = "9.9.9.9".parse().unwrap();
+        let det = ReputationDetector::new(1000, vec![denied, denied]);
+        let v = det.inspect(&req_from("9.9.9.9"));
+        assert_eq!(v.iter().filter(|x| x.rule == "ip_denied").count(), 1);
     }
 
     #[test]

@@ -7,7 +7,7 @@ production.
 Set the release tag once:
 
 ```bash
-export VERSION=v0.4.4
+export VERSION=v0.4.5
 export REPO=guaracloud/purple-wolf
 ```
 

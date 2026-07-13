@@ -83,12 +83,22 @@ impl Detector for SignatureDetector {
 
     fn inspect(&self, req: &Request) -> Vec<Verdict> {
         let mut verdicts = Vec::new();
+        // A request can repeat one cheap literal thousands of times in a
+        // buffered body. Report each static signature at most once so verdict
+        // allocation is bounded by the signature table, while still scanning
+        // every field for distinct patterns.
+        let mut matched = [false; SIGNATURES.len()];
         // Header values (User-Agent, Cookie, Referer, X-*, etc.) are already
         // part of `inspectable_fields()` per the allow-list in `request.rs`.
         // Fields are raw bytes (NEW-I2); aho-corasick matches bytes natively.
         for field in req.inspectable_fields() {
             for m in self.matcher.find_iter(field) {
-                let (lit, rule, sev) = SIGNATURES[m.pattern().as_usize()];
+                let pattern = m.pattern().as_usize();
+                if matched[pattern] {
+                    continue;
+                }
+                matched[pattern] = true;
+                let (lit, rule, sev) = SIGNATURES[pattern];
                 verdicts.push(Verdict {
                     group: Group::Signatures,
                     rule,
@@ -218,6 +228,33 @@ mod tests {
         // And only once, because we no longer scan UA via both inspectable_fields
         // AND a separate special-case loop.
         assert_eq!(v.iter().filter(|x| x.rule == "scanner_ua").count(), 1);
+    }
+
+    #[test]
+    fn repeated_literal_is_reported_once_across_all_fields() {
+        let req = Request::build(
+            "POST",
+            "h",
+            "/`",
+            "payload=```",
+            vec![("X-Template".into(), "```".into())],
+            vec![b'`'; 16 * 1024],
+            true,
+            ip(),
+        );
+        let verdicts = SignatureDetector::new().inspect(&req);
+        assert_eq!(
+            verdicts
+                .iter()
+                .filter(|verdict| verdict.rule == "rce_backtick")
+                .count(),
+            1,
+            "one static pattern must allocate at most one verdict: {verdicts:?}"
+        );
+        assert!(
+            verdicts.len() <= SIGNATURES.len(),
+            "verdict count must be bounded by the static signature table"
+        );
     }
 
     // ── Signature pack expansion (Tier 2.9) ─────────────────────────────────

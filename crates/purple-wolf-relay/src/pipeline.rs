@@ -20,10 +20,12 @@
 //! `Ok`, we keep going; only when the channel is full do we fall
 //! into the drop branch.
 
+use anyhow::Context as _;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinSet;
 
 use crate::config::Resolved;
 use crate::envelope::{Envelope, EnvelopeSource};
@@ -34,6 +36,12 @@ use crate::subscribers::filter::CompiledFilter;
 use crate::subscribers::http::{config_from, run_sink, HttpSinkConfig};
 
 const SOURCE_CHANNEL_CAP: usize = 1024;
+const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+enum ParserExit {
+    Shutdown,
+    SourcesClosed,
+}
 
 pub async fn run(
     resolved: Resolved,
@@ -68,6 +76,7 @@ pub async fn run(
     // run_sink. Disabled subscribers are skipped — their slot doesn't
     // exist in the fan-out vector.
     let mut subs: Vec<PerSubscriber> = Vec::new();
+    let mut sink_tasks = JoinSet::new();
     for s in &resolved.raw.subscribers {
         if !s.enabled {
             tracing::info!(subscriber_id = %s.id, "subscriber disabled; skipping");
@@ -76,7 +85,7 @@ pub async fn run(
         let secret = resolved
             .subscriber_secrets
             .get(&s.id)
-            .expect("validated config guarantees a secret per subscriber")
+            .ok_or_else(|| anyhow::anyhow!("validated subscriber {:?} has no secret", s.id))?
             .to_vec();
         let dlq = Arc::new(crate::subscribers::dlq::Dlq::new(1000));
         let cfg: HttpSinkConfig = config_from(s, secret, dlq, Some(metrics.clone()));
@@ -84,34 +93,25 @@ pub async fn run(
         let filter = CompiledFilter::compile(&s.filter);
         let id = cfg.id.clone();
         let sink_shutdown = shutdown.resubscribe();
-        let sink_handle = tokio::spawn(run_sink(cfg, rx, sink_shutdown));
-        subs.push(PerSubscriber {
-            id,
-            filter,
-            tx,
-            sink_handle,
-        });
+        sink_tasks.spawn(run_sink(cfg, rx, sink_shutdown));
+        subs.push(PerSubscriber { id, filter, tx });
     }
 
     // Single mpsc all source tasks feed.
     let (raw_tx, mut raw_rx) = mpsc::channel::<RawEvent>(SOURCE_CHANNEL_CAP);
 
-    let mut source_handles = Vec::new();
+    let mut source_tasks = JoinSet::new();
     for sc in &resolved.raw.sources {
-        let source = match sources::build(sc) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to build source");
-                continue;
-            }
-        };
+        let source = sources::build(sc).context("build source")?;
+        let source_id = source.id().to_string();
         let tx = raw_tx.clone();
         let sd = shutdown.resubscribe();
-        source_handles.push(tokio::spawn(async move {
-            if let Err(e) = source.run(tx, sd).await {
-                tracing::error!(error = %e, "source task ended with error");
-            }
-        }));
+        source_tasks.spawn(async move {
+            source
+                .run(tx, sd)
+                .await
+                .with_context(|| format!("source {source_id:?} failed"))
+        });
     }
     // Drop our own clone of raw_tx so the parser exits naturally when
     // every source closes.
@@ -126,20 +126,20 @@ pub async fn run(
     let parser_metrics = metrics.clone();
     let parser_instance_id = instance_id.clone();
     let mut parser_shutdown = shutdown.resubscribe();
-    let parser_handle = tokio::spawn(async move {
+    let mut parser_handle = tokio::spawn(async move {
         let mut subs = subs;
         let enricher_timeout = Duration::from_millis(500);
-        loop {
+        let exit = loop {
             tokio::select! {
                 biased;
                 _ = parser_shutdown.recv() => {
                     tracing::info!("pipeline parser shutting down");
-                    break;
+                    break ParserExit::Shutdown;
                 }
                 msg = raw_rx.recv() => {
                     let Some(raw) = msg else {
                         tracing::info!("all sources closed; pipeline draining");
-                        break;
+                        break ParserExit::SourcesClosed;
                     };
                     process_one(
                         &raw,
@@ -152,26 +152,177 @@ pub async fn run(
                     ).await;
                 }
             }
-        }
+        };
         // Best-effort drop of sub.tx clones happens when the loop
         // exits — sink tasks then drain or shut down on their own.
         drop(subs);
+        exit
     });
 
-    // Wait for shutdown.
-    let _ = shutdown.recv().await;
-    tracing::info!("pipeline received shutdown");
+    // Supervise every source and the parser. A failed source used to be logged
+    // inside a detached task while readiness stayed at 1 and the outer relay
+    // waited forever for a signal. Normal source completion (stdin EOF) is not
+    // an error; the parser drains and exits after the last sender closes.
+    let mut parser_finished = false;
+    let mut sources_exhausted = false;
+    let mut outcome = loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.recv() => {
+                tracing::info!("pipeline received shutdown");
+                break Ok(());
+            }
+            joined = source_tasks.join_next(), if !source_tasks.is_empty() => {
+                match joined {
+                    Some(Ok(Ok(()))) => {
+                        tracing::info!(remaining = source_tasks.len(), "source task stopped");
+                    }
+                    Some(Ok(Err(error))) => {
+                        tracing::error!(%error, "source task failed");
+                        break Err(error);
+                    }
+                    Some(Err(error)) => {
+                        tracing::error!(%error, "source task join failure");
+                        break Err(anyhow::anyhow!("source task join failure: {error}"));
+                    }
+                    None => {}
+                }
+            }
+            joined = sink_tasks.join_next(), if !sink_tasks.is_empty() => {
+                match joined {
+                    Some(Ok(())) if parser_handle.is_finished() => {
+                        tracing::info!(remaining = sink_tasks.len(), "subscriber sink stopped after parser completion");
+                    }
+                    Some(Ok(())) => {
+                        break Err(anyhow::anyhow!("subscriber sink stopped while the parser was active"));
+                    }
+                    Some(Err(error)) => {
+                        tracing::error!(%error, "subscriber sink task join failure");
+                        break Err(anyhow::anyhow!("subscriber sink task join failure: {error}"));
+                    }
+                    None => {}
+                }
+            }
+            joined = &mut parser_handle => {
+                parser_finished = true;
+                match joined {
+                    Ok(exit) => {
+                        sources_exhausted = matches!(exit, ParserExit::SourcesClosed);
+                        break Ok(())
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "parser task join failure");
+                        break Err(anyhow::anyhow!("parser task join failure: {error}"));
+                    }
+                }
+            }
+        }
+    };
+
     metrics.ready.set(0);
 
-    // Source tasks listen on the same broadcast; they're already in
-    // shutdown. Wait briefly for them.
-    for h in source_handles {
-        let _ = tokio::time::timeout(Duration::from_secs(5), h).await;
+    // An error is unrecoverable for this pipeline instance. Abort remaining
+    // work immediately; on ordinary shutdown the shared broadcast gives
+    // sources time to persist bookmarks and lets the parser exit cleanly.
+    if outcome.is_err() {
+        source_tasks.abort_all();
+        sink_tasks.abort_all();
+        if !parser_finished {
+            parser_handle.abort();
+        }
     }
-    // Parser/fan-out:
-    let _ = tokio::time::timeout(Duration::from_secs(5), parser_handle).await;
+
+    match tokio::time::timeout(TASK_SHUTDOWN_TIMEOUT, drain_source_tasks(&mut source_tasks)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) if outcome.is_ok() => outcome = Err(error),
+        Ok(Err(_)) => {}
+        Err(_) => {
+            source_tasks.abort_all();
+            while source_tasks.join_next().await.is_some() {}
+            if outcome.is_ok() {
+                outcome = Err(anyhow::anyhow!(
+                    "source tasks did not stop within {TASK_SHUTDOWN_TIMEOUT:?}"
+                ));
+            }
+        }
+    }
+
+    if !parser_finished {
+        match tokio::time::timeout(TASK_SHUTDOWN_TIMEOUT, &mut parser_handle).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) if outcome.is_ok() => {
+                outcome = Err(anyhow::anyhow!("parser task join failure: {error}"));
+            }
+            Ok(Err(_)) => {}
+            Err(_) => {
+                parser_handle.abort();
+                let _ = parser_handle.await;
+                if outcome.is_ok() {
+                    outcome = Err(anyhow::anyhow!(
+                        "parser task did not stop within {TASK_SHUTDOWN_TIMEOUT:?}"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Parser completion after all finite sources close drops every subscriber
+    // sender. Let configured HTTP timeouts/retries govern a complete drain;
+    // otherwise the top-level supervisor's shutdown broadcast can discard the
+    // final queued delivery. Signal/error shutdown remains bounded.
+    let sink_result = if sources_exhausted && outcome.is_ok() {
+        Ok(drain_sink_tasks(&mut sink_tasks).await)
+    } else {
+        tokio::time::timeout(TASK_SHUTDOWN_TIMEOUT, drain_sink_tasks(&mut sink_tasks)).await
+    };
+    match sink_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) if outcome.is_ok() => outcome = Err(error),
+        Ok(Err(_)) => {}
+        Err(_) => {
+            sink_tasks.abort_all();
+            while sink_tasks.join_next().await.is_some() {}
+            if outcome.is_ok() {
+                outcome = Err(anyhow::anyhow!(
+                    "subscriber sinks did not stop within {TASK_SHUTDOWN_TIMEOUT:?}"
+                ));
+            }
+        }
+    }
 
     tracing::info!("pipeline stopped");
+    outcome
+}
+
+async fn drain_source_tasks(source_tasks: &mut JoinSet<anyhow::Result<()>>) -> anyhow::Result<()> {
+    let mut first_error = None;
+    while let Some(joined) = source_tasks.join_next().await {
+        let error = match joined {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(error) if error.is_cancelled() => None,
+            Err(error) => Some(anyhow::anyhow!("source task join failure: {error}")),
+        };
+        if first_error.is_none() {
+            first_error = error;
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+async fn drain_sink_tasks(sink_tasks: &mut JoinSet<()>) -> anyhow::Result<()> {
+    while let Some(joined) = sink_tasks.join_next().await {
+        if let Err(error) = joined {
+            if !error.is_cancelled() {
+                return Err(anyhow::anyhow!(
+                    "subscriber sink task join failure: {error}"
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -281,8 +432,6 @@ struct PerSubscriber {
     id: String,
     filter: CompiledFilter,
     tx: mpsc::Sender<Arc<Envelope>>,
-    #[allow(dead_code)]
-    sink_handle: tokio::task::JoinHandle<()>,
 }
 
 async fn fan_out(env: Arc<Envelope>, subs: &mut [PerSubscriber], metrics: &Arc<Metrics>) {
@@ -381,7 +530,6 @@ mod tests {
             id: "sub".into(),
             filter: CompiledFilter::compile(&SubscriberFilter::default()),
             tx,
-            sink_handle: tokio::spawn(async {}),
         }];
         let metrics = Arc::new(Metrics::new().unwrap());
 
@@ -389,5 +537,31 @@ mod tests {
 
         let received = rx.recv().await.expect("envelope should be queued");
         assert_eq!(received.event_id, event_id);
+    }
+
+    #[tokio::test]
+    async fn source_failure_returns_error_and_clears_readiness() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let missing = dir.path().join("missing-traefik.log");
+        let quoted_path =
+            serde_json::to_string(&missing.to_string_lossy()).expect("path should serialize");
+        let cfg = crate::config::load_from_str(&format!(
+            "sources:\n  - type: log_tail\n    path: {quoted_path}\nsubscribers: []\n"
+        ))
+        .expect("config should parse");
+        let resolved = crate::config::validate(&cfg).expect("config should validate");
+        let metrics = Arc::new(Metrics::new().expect("metrics should initialize"));
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            run(resolved, metrics.clone(), shutdown_rx),
+        )
+        .await
+        .expect("pipeline must not hang after an unrecoverable source failure")
+        .expect_err("missing source file must fail the pipeline");
+
+        assert!(error.to_string().contains("source"), "error: {error:#}");
+        assert_eq!(metrics.ready.get(), 0, "failed pipeline must not be ready");
     }
 }

@@ -62,7 +62,10 @@ enrichments:
 
 The pipeline runs as a `tokio` task graph: one task per source, one
 parser/enricher task, and one task per subscriber with its own bounded
-mpsc queue so a slow subscriber cannot backpressure fast subscribers.
+mpsc queue so a slow subscriber cannot backpressure fast subscribers. Source,
+parser, and admin tasks are supervised: an unrecoverable source/parser failure
+clears readiness, shuts down the remaining task graph, and reaches the process
+exit status instead of leaving a ready-but-inert relay.
 
 ## What this is not
 

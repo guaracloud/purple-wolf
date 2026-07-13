@@ -33,7 +33,15 @@ fn engine(cfg: &Config, enabled_groups: &[Group]) -> Engine {
                     .reputation
                     .deny_list
                     .iter()
-                    .filter_map(|ip| ip.parse().ok())
+                    .filter_map(|ip| {
+                        let parsed = parse_ip(ip);
+                        if parsed.is_none() {
+                            host::log(&format!(
+                                "purple-wolf: ignoring invalid reputation.denyList entry {ip:?}"
+                            ));
+                        }
+                        parsed
+                    })
                     .collect();
                 detectors.push(Box::new(ReputationDetector::with_capacity(
                     cfg.reputation.per_second,
@@ -312,34 +320,39 @@ fn effective_group_mode(cfg: &Config, g: Group) -> GroupMode {
 ///   4. Fall back to `0.0.0.0` so the request still reaches detectors;
 ///      the audit log will show the placeholder, signalling to the
 ///      operator that source-IP attribution failed for this request.
-fn parse_peer(addr: &str) -> IpAddr {
-    let unspecified = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+fn parse_ip(addr: &str) -> Option<IpAddr> {
     let addr = addr.trim();
     if addr.is_empty() {
-        return unspecified;
+        return None;
     }
     // 1. Direct parse — handles bare IPv4 and bare IPv6.
     if let Ok(ip) = addr.parse::<IpAddr>() {
-        return ip;
+        return Some(ip);
     }
     // 2. Strip ":port" (rightmost) and retry — handles `1.2.3.4:5555`
     //    and any unbracketed-IPv6-with-port form some hosts emit.
-    if let Some((host, _)) = addr.rsplit_once(':') {
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return ip;
-        }
-        // 3a. Strip brackets in case host = "[::1]".
-        let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
-        if let Ok(ip) = unbracketed.parse::<IpAddr>() {
-            return ip;
+    if let Some((host, port)) = addr.rsplit_once(':') {
+        if port.parse::<u16>().is_ok() {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                return Some(ip);
+            }
+            // 3a. Strip brackets in case host = "[::1]".
+            let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(ip) = unbracketed.parse::<IpAddr>() {
+                return Some(ip);
+            }
         }
     }
     // 3b. Bare bracketed form `[::1]` with no port.
     let unbracketed = addr.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = unbracketed.parse::<IpAddr>() {
-        return ip;
+        return Some(ip);
     }
-    unspecified
+    None
+}
+
+fn parse_peer(addr: &str) -> IpAddr {
+    parse_ip(addr).unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
 }
 
 /// http-wasm exported response hook (unused; we don't modify responses).
@@ -349,7 +362,7 @@ pub extern "C" fn handle_response(_req_ctx: u32, _is_error: u32) {}
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-    use super::parse_peer;
+    use super::{parse_ip, parse_peer};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
@@ -358,6 +371,20 @@ mod tests {
             parse_peer("203.0.113.7:5555"),
             IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))
         );
+    }
+
+    #[test]
+    fn deny_list_parser_accepts_documented_ip_and_ip_port_forms() {
+        assert_eq!(
+            parse_ip("203.0.113.7:5555"),
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)))
+        );
+        assert_eq!(
+            parse_ip("[::1]:8080"),
+            Some(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        );
+        assert_eq!(parse_ip("not-an-ip"), None);
+        assert_eq!(parse_ip("203.0.113.7:not-a-port"), None);
     }
 
     #[test]

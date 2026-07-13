@@ -37,9 +37,9 @@ pub struct RunOpts {
 }
 
 /// Load config, validate, and (unless `validate_only`) run the pipeline
-/// until SIGINT/SIGTERM. Admin server and pipeline are spawned on a
-/// shared broadcast shutdown channel; the first ctrl_c (or SIGTERM, on
-/// Unix) sends the shutdown signal to both.
+/// until SIGINT/SIGTERM or finite sources reach EOF. Admin server and pipeline
+/// are supervised on a shared broadcast shutdown channel; a signal or an
+/// unexpected task failure stops the counterpart and the error is propagated.
 pub async fn run(opts: RunOpts) -> anyhow::Result<()> {
     let cfg = config::load_from_file(&opts.config_path)?;
     let resolved = config::validate(&cfg)?;
@@ -70,50 +70,128 @@ pub async fn run(opts: RunOpts) -> anyhow::Result<()> {
         );
     }
 
-    let admin_handle = tokio::spawn(admin::serve(
+    let mut admin_handle = tokio::spawn(admin::serve(
         admin_addr,
         metrics.clone(),
         admin_token,
         shutdown_tx.subscribe(),
     ));
-    let pipeline_handle = tokio::spawn(pipeline::run(
+    let mut pipeline_handle = tokio::spawn(pipeline::run(
         resolved,
         metrics.clone(),
         shutdown_tx.subscribe(),
     ));
 
-    wait_for_signal().await;
-    tracing::info!("shutdown signal received");
-    let _ = shutdown_tx.send(());
+    type TaskOutcome = Result<anyhow::Result<()>, tokio::task::JoinError>;
+    enum Stop {
+        Signal(anyhow::Result<()>),
+        Admin(TaskOutcome),
+        Pipeline(TaskOutcome),
+    }
 
-    // Both tasks listen on the broadcast — join in parallel and log
-    // anything that didn't go cleanly.
-    let (a, p) = tokio::join!(admin_handle, pipeline_handle);
-    log_task_outcome("admin", a);
-    log_task_outcome("pipeline", p);
-    Ok(())
+    let stop = tokio::select! {
+        signal = wait_for_signal() => Stop::Signal(signal),
+        outcome = &mut admin_handle => Stop::Admin(outcome),
+        outcome = &mut pipeline_handle => Stop::Pipeline(outcome),
+    };
+
+    match stop {
+        Stop::Signal(signal_result) => {
+            tracing::info!("shutdown signal received");
+            let _ = shutdown_tx.send(());
+            let (admin_outcome, pipeline_outcome) = tokio::join!(admin_handle, pipeline_handle);
+            signal_result?;
+            task_outcome("admin", admin_outcome)?;
+            task_outcome("pipeline", pipeline_outcome)
+        }
+        Stop::Admin(admin_outcome) => {
+            tracing::error!("admin task stopped before shutdown");
+            let admin_result = task_outcome("admin", admin_outcome);
+            let _ = shutdown_tx.send(());
+            let pipeline_result = task_outcome("pipeline", pipeline_handle.await);
+            admin_result?;
+            pipeline_result?;
+            anyhow::bail!("admin task stopped unexpectedly")
+        }
+        Stop::Pipeline(pipeline_outcome) => {
+            let pipeline_result = task_outcome("pipeline", pipeline_outcome);
+            if let Err(error) = &pipeline_result {
+                tracing::error!(%error, "pipeline task failed; stopping relay");
+            } else {
+                tracing::info!("pipeline completed; stopping admin server");
+            }
+            let _ = shutdown_tx.send(());
+            let admin_result = task_outcome("admin", admin_handle.await);
+            pipeline_result?;
+            admin_result
+        }
+    }
 }
 
-fn log_task_outcome(name: &str, outcome: Result<anyhow::Result<()>, tokio::task::JoinError>) {
+fn task_outcome(
+    name: &str,
+    outcome: Result<anyhow::Result<()>, tokio::task::JoinError>,
+) -> anyhow::Result<()> {
     match outcome {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(task = name, error = %e, "task returned error"),
-        Err(e) => tracing::warn!(task = name, error = %e, "task join failure"),
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(anyhow::anyhow!("{name} task failed: {error:#}")),
+        Err(error) => Err(anyhow::anyhow!("{name} task join failure: {error}")),
     }
 }
 
 #[cfg(unix)]
-async fn wait_for_signal() {
+async fn wait_for_signal() -> anyhow::Result<()> {
     use tokio::signal::unix::{signal, SignalKind};
-    let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-    let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|error| anyhow::anyhow!("install SIGTERM handler: {error}"))?;
+    let mut sigint = signal(SignalKind::interrupt())
+        .map_err(|error| anyhow::anyhow!("install SIGINT handler: {error}"))?;
     tokio::select! {
         _ = sigterm.recv() => tracing::info!("got SIGTERM"),
         _ = sigint.recv()  => tracing::info!("got SIGINT"),
     }
+    Ok(())
 }
 
 #[cfg(not(unix))]
-async fn wait_for_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+async fn wait_for_signal() -> anyhow::Result<()> {
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|error| anyhow::anyhow!("install or wait for ctrl-c handler: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn run_propagates_source_failure_without_waiting_for_a_signal() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let missing = dir.path().join("missing-traefik.log");
+        let quoted_path =
+            serde_json::to_string(&missing.to_string_lossy()).expect("path should serialize");
+        let config_path = dir.path().join("relay.yaml");
+        std::fs::write(
+            &config_path,
+            format!("sources:\n  - type: log_tail\n    path: {quoted_path}\nsubscribers: []\n"),
+        )
+        .expect("config should be written");
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            run(RunOpts {
+                config_path,
+                validate_only: false,
+                admin_addr: "127.0.0.1:0".to_string(),
+            }),
+        )
+        .await
+        .expect("relay must not hang after pipeline failure")
+        .expect_err("missing source file must fail the relay");
+
+        assert!(error.to_string().contains("source"), "error: {error:#}");
+    }
 }

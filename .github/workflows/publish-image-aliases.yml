@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing release tag to alias, for example v0.4.4
+        description: Existing release tag to alias, for example v0.4.5
         required: true
         type: string
 

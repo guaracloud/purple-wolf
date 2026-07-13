@@ -21,14 +21,19 @@ jobs:
           set -euo pipefail
           git fetch origin main
           baseline_dir="$RUNNER_TEMP/purple-wolf-main"
+          baseline_target="$RUNNER_TEMP/purple-wolf-target-main"
           git worktree add --detach "$baseline_dir" origin/main
           trap 'git worktree remove --force "$baseline_dir"' EXIT
           (
             cd "$baseline_dir"
-            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
+            CARGO_TARGET_DIR="$baseline_target" \
               cargo bench --locked -p purple-wolf-core --bench pipeline -- \
               --save-baseline main
           )
+          # Keep compiled artifacts isolated between worktrees. Criterion only
+          # needs the saved measurement data in order to compare the PR.
+          mkdir -p "$GITHUB_WORKSPACE/target/criterion"
+          cp -R "$baseline_target/criterion/." "$GITHUB_WORKSPACE/target/criterion/"
       - name: Compare PR against baseline (fail >10% regression)
         run: |
           cargo bench --locked -p purple-wolf-core --bench pipeline -- --baseline main \

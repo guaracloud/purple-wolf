@@ -31,7 +31,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: relay
-          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.4
+          image: ghcr.io/guaracloud/purple-wolf-relay:0.4.5
           imagePullPolicy: IfNotPresent
           args:
             - --config=/etc/purple-wolf-relay/relay.yaml

@@ -35,7 +35,7 @@ impl RetrySchedule {
         let shift = attempt.min(20);
         let exp = self.base_delay_ms.saturating_mul(1u64 << shift);
         let capped = exp.min(self.max_delay_ms);
-        let jitter = rand::thread_rng().gen_range(0.8..=1.2);
+        let jitter = rand::rng().random_range(0.8..=1.2);
         let jittered = (capped as f64 * jitter) as u64;
         Duration::from_millis(jittered)
     }

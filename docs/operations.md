@@ -11,8 +11,10 @@ curl -fsS http://purple-wolf-relay:9090/version
 curl -fsS http://purple-wolf-relay:9090/metrics
 ```
 
-`/readyz` returns ready after the pipeline starts. Use `/healthz` for liveness
-and `/readyz` for rollout gating.
+`/readyz` returns ready after configured sources and subscriber workers start.
+An unrecoverable source or parser failure immediately clears readiness and exits
+the relay with an error so the workload supervisor can restart it. Use
+`/healthz` for process liveness and `/readyz` for rollout gating.
 
 If `relay.admin_token_env` or `relay.admin_token_file` is configured, `/metrics`
 and `/version` require `Authorization: Bearer <token>`. `/healthz` and

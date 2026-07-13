@@ -1,4 +1,4 @@
-# Threat Model - purple-wolf v0.4.4
+# Threat Model - purple-wolf v0.4.5
 
 This document is the source of truth for what purple-wolf is and is not
 designed to protect against. Adopters should read it before deploying;
@@ -56,7 +56,7 @@ perspective:
 
 ---
 
-## 2. In scope (what purple-wolf v0.4.4 is designed to catch)
+## 2. In scope (what purple-wolf v0.4.5 is designed to catch)
 
 | Attack class | Detector | Notes |
 |---|---|---|
@@ -75,6 +75,11 @@ perspective:
 | Per-IP deny list | `reputation` | Operator-supplied list |
 | Log4Shell-style `${jndi:...}` lookup | `signatures` | Case-insensitive literal |
 
+The signature detector reports each compile-time literal at most once per
+request. Repeating a one-byte signature throughout a buffered body therefore
+cannot amplify verdict/detail allocations beyond the static signature-table
+size; distinct signatures are still reported independently.
+
 ---
 
 ## 3. Out of scope (explicit non-goals)
@@ -88,7 +93,7 @@ perspective:
   WASM linear memory per pooled guest instance, per Middleware, per Traefik
   pod. Concurrent requests can be distributed across guests, so this is not
   a strict pod-wide quota and the effective aggregate can exceed
-  `configured × pod_count`. A shared-state backend is not shipped in v0.4.4.
+  `configured × pod_count`. A shared-state backend is not shipped in v0.4.5.
 - **Streaming body inspection.** The plugin reads up to
   `body.maxInspectBytes` (default 1 MiB) into WASM memory. With
   `overCap: pass`, it continues draining and reconstructing the body through
@@ -146,7 +151,7 @@ surfaced two concrete misses: User-Agent SQLi with a browser-like
 
 The benchmark numbers have not yet been rerun after these fixes. Treat
 the published benchmark as historical live-stack evidence plus current
-code-level fixes, not as fresh v0.4.4 benchmark evidence.
+code-level fixes, not as fresh v0.4.5 live-stack benchmark evidence.
 
 ### 3.3 Non-goals at the integrity level
 

@@ -153,6 +153,12 @@ unenriched envelope.
 tokenizer, low false-positive rate) + aho-corasick literal signatures +
 structural anomaly checks + per-IP rate limiting.
 
+Each compile-time literal signature emits at most one verdict per request,
+including when the literal is repeated across the body, URL, and headers.
+Distinct literals remain independently visible, even when they share a rule
+name. This keeps audit/verdict memory bounded by the static signature table
+without changing whether the request blocks.
+
 The engine deliberately does NOT replicate OWASP CRS's regex-rule-per-keyword
 detection. CRS catches atomic tokens (`INFORMATION_SCHEMA`, `database(`,
 `sleep(20)`) via individual rules; purple-wolf instead aims for high-precision
